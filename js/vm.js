@@ -28,9 +28,9 @@ class VMManager {
       bootFromCd: false,       // 从光驱启动
       enableNetwork: false,    // 网络（需要 websockproxy，默认关闭）
       acpi: true,              // ACPI
-      wasmUrl: 'https://copy.sh/v86/v86.wasm',
-      biosUrl: 'https://copy.sh/v86/bios/seabios.bin',
-      vgabiosUrl: 'https://copy.sh/v86/bios/vgabios.bin'
+      wasmUrl: 'v86/v86.wasm',
+      biosUrl: 'v86/bios/seabios.bin',
+      vgabiosUrl: 'v86/bios/vgabios.bin'
     };
   }
 
@@ -239,20 +239,21 @@ class VMManager {
     }
   }
 
-  // 加载 v86 引擎
+  // 加载 v86 引擎（已在 HTML 中直接引入，这里做兼容性检查）
   async loadV86Engine() {
     if (typeof V86Starter !== 'undefined') {
       return;
     }
 
+    // 回退：动态加载本地文件
     return new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = 'https://copy.sh/v86/libv86.js';
+      script.src = 'v86/libv86.js';
       script.onload = () => {
         this.log('v86 引擎加载完成');
         resolve();
       };
-      script.onerror = () => reject(new Error('无法加载 v86 引擎 (libv86.js)，请检查网络连接'));
+      script.onerror = () => reject(new Error('无法加载 v86 引擎 (v86/libv86.js)'));
       document.head.appendChild(script);
     });
   }

@@ -1,5 +1,5 @@
 // Service Worker - 离线缓存支持
-const CACHE_NAME = 'win10-simulator-v2';
+const CACHE_NAME = 'win10-simulator-v3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -10,6 +10,10 @@ const ASSETS_TO_CACHE = [
   './js/vm.js',
   './js/storage.js',
   './js/indexeddb-buffer.js',
+  './v86/libv86.js',
+  './v86/v86.wasm',
+  './v86/bios/seabios.bin',
+  './v86/bios/vgabios.bin',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
