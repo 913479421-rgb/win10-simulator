@@ -17,13 +17,13 @@ class VMManager {
     this._imageData = null;
   }
 
-  // 默认配置 - 针对手机优化
+  // 默认配置 - 针对手机浏览器内存限制优化
   getDefaultConfig() {
     return {
-      memorySize: 1024,        // 内存 MB (手机浏览器限制，建议 512-2048)
-      vgaMemorySize: 32,       // 显存 MB
+      memorySize: 512,         // 内存 MB (手机浏览器限制，建议 256-1024)
+      vgaMemorySize: 16,       // 显存 MB
       cpuCount: 1,             // CPU 核心数 (WASM 通常单核)
-      diskSize: 32 * 1024,     // 磁盘大小 MB (32GB)
+      diskSize: 16 * 1024,     // 磁盘大小 MB (16GB，避免存储压力)
       cdromPath: '',           // ISO 路径
       hdaPath: 'windows10.img', // 系统盘文件名
       bootFromCd: false,       // 从光驱启动
@@ -105,9 +105,33 @@ class VMManager {
         this.log(`虚拟磁盘已创建: ${this.config.diskSize / 1024} GB`);
       }
 
-      // 2. 加载虚拟磁盘
-      this.log('正在加载虚拟磁盘...');
-      const diskBuffer = await this.storageManager.loadDisk(this.config.hdaPath);
+      // 2. 获取磁盘元数据（不加载整个磁盘内容）
+      this.log('正在准备虚拟磁盘（异步按需加载）...');
+      const diskInfo = await this.storageManager.getDiskInfo(this.config.hdaPath);
+      const diskSize = diskInfo ? diskInfo.size : (this.config.diskSize * 1024 * 1024);
+
+      // 创建异步磁盘接口 - 按需从 IndexedDB 读取块，避免内存溢出
+      const self = this;
+      const asyncDisk = {
+        async: true,
+        size: diskSize,
+        get_disk: function(offset, length, callback) {
+          self.storageManager.readDiskRange(self.config.hdaPath, offset, length)
+            .then(data => callback(data))
+            .catch(err => {
+              console.error('磁盘读取错误:', err);
+              callback(new Uint8Array(length)); // 返回空数据
+            });
+        },
+        set_disk: function(offset, data, callback) {
+          self.storageManager.writeDiskRange(self.config.hdaPath, offset, data)
+            .then(() => callback())
+            .catch(err => {
+              console.error('磁盘写入错误:', err);
+              callback();
+            });
+        }
+      };
 
       // 3. 准备启动参数
       const emulatorOptions = {
@@ -117,11 +141,7 @@ class VMManager {
           canvas: this._screenCanvas,
           context: this._screenCtx
         },
-        hda: {
-          buffer: diskBuffer,
-          async: true,
-          size: this.config.diskSize * 1024 * 1024
-        },
+        hda: asyncDisk,
         bios: { url: this.config.biosUrl },
         vga_bios: { url: this.config.vgabiosUrl },
         wasm_path: this.config.wasmUrl,
@@ -135,11 +155,25 @@ class VMManager {
         autostart: true
       };
 
-      // 4. 如果有 ISO，挂载光驱
+      // 4. 如果有 ISO，挂载光驱（ISO 也用异步接口）
       if (this.config.cdromPath && this.config.bootFromCd) {
-        this.log('正在加载 ISO 镜像...');
-        const isoBuffer = await this.storageManager.loadDisk(this.config.cdromPath);
-        emulatorOptions.cdrom = { buffer: isoBuffer, async: true };
+        this.log('正在准备 ISO 镜像（异步加载）...');
+        const isoInfo = await this.storageManager.getIsoInfo(this.config.cdromPath);
+        const isoSize = isoInfo ? isoInfo.size : 0;
+
+        const asyncCdrom = {
+          async: true,
+          size: isoSize,
+          get_disk: function(offset, length, callback) {
+            self.storageManager.readDiskRange(self.config.cdromPath, offset, length, true)
+              .then(data => callback(data))
+              .catch(err => {
+                console.error('ISO 读取错误:', err);
+                callback(new Uint8Array(length));
+              });
+          }
+        };
+        emulatorOptions.cdrom = asyncCdrom;
         emulatorOptions.boot_order = 0x13; // 从光驱启动
       } else {
         emulatorOptions.boot_order = 0x11; // 从硬盘启动
@@ -208,11 +242,8 @@ class VMManager {
     this._setState('stopping');
 
     try {
-      // 保存磁盘状态
-      this.log('正在保存磁盘状态...');
-      if (this.emulator.hda && this.emulator.hda.buffer) {
-        await this.storageManager.saveDisk(this.config.hdaPath, this.emulator.hda.buffer);
-      }
+      // 异步磁盘模式下，数据已实时写入 IndexedDB，无需额外保存
+      this.log('磁盘数据已实时保存');
 
       // 停止模拟器
       this.emulator.stop();

@@ -148,6 +148,113 @@ class StorageManager {
     console.log(`[Storage] 磁盘保存完成: ${totalChunks} 块`);
   }
 
+  // 获取磁盘元信息
+  async getDiskInfo(name) {
+    await this.openDB();
+    return this._getDiskInfo(name);
+  }
+
+  // 获取 ISO 元信息
+  async getIsoInfo(name) {
+    await this.openDB();
+    return new Promise((resolve) => {
+      const transaction = this.db.transaction(['isos'], 'readonly');
+      const store = transaction.objectStore('isos');
+      const index = store.index('name');
+      const request = index.get(name);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+    });
+  }
+
+  // 按需读取磁盘指定范围（异步接口，避免一次性加载整个磁盘）
+  async readDiskRange(name, offset, length, isIso = false) {
+    await this.openDB();
+
+    const storeName = isIso ? 'isos' : 'disks';
+    const info = isIso ? await this.getIsoInfo(name) : await this._getDiskInfo(name);
+
+    if (!info) {
+      return new Uint8Array(length);
+    }
+
+    const result = new Uint8Array(length);
+    const chunkSize = info.chunkSize || this.chunkSize;
+
+    // 计算需要读取的块范围
+    const startChunk = Math.floor(offset / chunkSize);
+    const endChunk = Math.floor((offset + length - 1) / chunkSize);
+
+    // 逐个块读取并拼接
+    for (let chunkIndex = startChunk; chunkIndex <= endChunk; chunkIndex++) {
+      const chunk = await this._getChunk(info.id, chunkIndex);
+      if (chunk) {
+        const chunkData = new Uint8Array(chunk.data);
+        const chunkOffset = chunkIndex * chunkSize;
+        const copyStart = Math.max(0, offset - chunkOffset);
+        const copyEnd = Math.min(chunkSize, offset + length - chunkOffset);
+        const resultOffset = Math.max(0, chunkOffset - offset);
+
+        for (let i = copyStart; i < copyEnd; i++) {
+          if (resultOffset + (i - copyStart) < length) {
+            result[resultOffset + (i - copyStart)] = chunkData[i];
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  // 按需写入磁盘指定范围
+  async writeDiskRange(name, offset, data) {
+    await this.openDB();
+
+    const info = await this._getDiskInfo(name);
+    if (!info) {
+      throw new Error(`磁盘不存在: ${name}`);
+    }
+
+    const chunkSize = info.chunkSize || this.chunkSize;
+    const dataArray = new Uint8Array(data);
+    const length = dataArray.length;
+
+    // 计算需要写入的块范围
+    const startChunk = Math.floor(offset / chunkSize);
+    const endChunk = Math.floor((offset + length - 1) / chunkSize);
+
+    // 逐个块读取-修改-写入
+    for (let chunkIndex = startChunk; chunkIndex <= endChunk; chunkIndex++) {
+      const chunkOffset = chunkIndex * chunkSize;
+      const chunkDataStart = Math.max(0, offset - chunkOffset);
+      const chunkDataEnd = Math.min(chunkSize, offset + length - chunkOffset);
+      const dataOffset = Math.max(0, chunkOffset - offset);
+
+      // 读取现有块（如果存在）
+      let chunk = await this._getChunk(info.id, chunkIndex);
+      let chunkData;
+
+      if (chunk) {
+        chunkData = new Uint8Array(chunk.data);
+      } else {
+        chunkData = new Uint8Array(chunkSize);
+      }
+
+      // 写入新数据
+      for (let i = chunkDataStart; i < chunkDataEnd; i++) {
+        if (dataOffset + (i - chunkDataStart) < length) {
+          chunkData[i] = dataArray[dataOffset + (i - chunkDataStart)];
+        }
+      }
+
+      // 保存块
+      await this._putChunk(info.id, chunkIndex, chunkData.buffer);
+    }
+
+    // 更新修改时间
+    await this._updateDiskModified(info.id);
+  }
+
   // 导入 ISO 镜像（从 File 对象）
   async importIso(file, onProgress) {
     await this.openDB();
@@ -276,6 +383,18 @@ class StorageManager {
       const request = index.getAll(diskId);
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(request.error);
+    });
+  }
+
+  // 获取单个块
+  async _getChunk(diskId, chunkIndex) {
+    return new Promise((resolve) => {
+      const transaction = this.db.transaction(['disk_chunks'], 'readonly');
+      const store = transaction.objectStore('disk_chunks');
+      const chunkId = `${diskId}_${chunkIndex}`;
+      const request = store.get(chunkId);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
     });
   }
 
