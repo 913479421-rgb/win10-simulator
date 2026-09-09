@@ -490,14 +490,33 @@ body {
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    background: #000;
 }
 
-.vm-screen {
+/* v86 screen_container - 包含文本模式 div 和图形模式 canvas */
+.screen-container {
+    position: relative;
+    max-width: 100%;
+    max-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.screen-container .v86-text-mode {
+    color: #ccc;
+    padding: 10px;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.screen-container .v86-graphics-mode {
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
     image-rendering: pixelated;
     touch-action: none;
+    cursor: crosshair;
 }
 
 .display-controls {

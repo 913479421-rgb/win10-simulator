@@ -7,14 +7,35 @@
 const AppState = {
     vm: null,
     storage: null,
-    vnc: null,
     isDisplayOpen: false,
-    modifierKeys: { ctrl: false, alt: false, shift: false, win: false },
-    lastTouchPos: { x: 0, y: 0 }
+    modifierKeys: { ctrl: false, alt: false, shift: false, win: false }
 };
 
 // DOM 元素
 const DOM = {};
+
+// PS/2 扫描码 (set 1)
+const SCANCODES = {
+    'Escape': 0x01, '1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05,
+    '5': 0x06, '6': 0x07, '7': 0x08, '8': 0x09, '9': 0x0A, '0': 0x0B,
+    '-': 0x0C, '=': 0x0D, 'Backspace': 0x0E, 'Tab': 0x0F,
+    'q': 0x10, 'w': 0x11, 'e': 0x12, 'r': 0x13, 't': 0x14,
+    'y': 0x15, 'u': 0x16, 'i': 0x17, 'o': 0x18, 'p': 0x19,
+    '[': 0x1A, ']': 0x1B, 'Enter': 0x1C, 'Control': 0x1D,
+    'a': 0x1E, 's': 0x1F, 'd': 0x20, 'f': 0x21, 'g': 0x22,
+    'h': 0x23, 'j': 0x24, 'k': 0x25, 'l': 0x26, ';': 0x27,
+    "'": 0x28, '`': 0x29, 'Shift': 0x2A, '\\': 0x2B,
+    'z': 0x2C, 'x': 0x2D, 'c': 0x2E, 'v': 0x2F, 'b': 0x30,
+    'n': 0x31, 'm': 0x32, ',': 0x33, '.': 0x34, '/': 0x35,
+    ' ': 0x39, 'CapsLock': 0x3A,
+    'F1': 0x3B, 'F2': 0x3C, 'F3': 0x3D, 'F4': 0x3E,
+    'F5': 0x3F, 'F6': 0x40, 'F7': 0x41, 'F8': 0x42,
+    'F9': 0x43, 'F10': 0x44, 'F11': 0x57, 'F12': 0x58,
+    'ArrowUp': 0x48, 'ArrowDown': 0x50, 'ArrowLeft': 0x4B, 'ArrowRight': 0x4D,
+    'Home': 0x47, 'End': 0x4F, 'PageUp': 0x49, 'PageDown': 0x51,
+    'Insert': 0x52, 'Delete': 0x53,
+    'Meta': 0x5B, 'Alt': 0x38
+};
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -39,7 +60,7 @@ function initDOM() {
         'info-system-disk', 'info-iso',
         'log-output', 'btn-clear-log',
         'display-overlay', 'btn-close-display', 'btn-keyboard',
-        'vm-screen', 'btn-right-click', 'btn-esc',
+        'screen_container', 'btn-right-click', 'btn-esc',
         'install-prompt', 'btn-dismiss-install'
     ];
     ids.forEach(id => {
@@ -50,7 +71,9 @@ function initDOM() {
 // 初始化虚拟机
 function initVM() {
     AppState.vm = new VMManager();
-    AppState.vm.setScreenCanvas(DOM['vm-screen']);
+
+    // v86 使用 screen_container（包含 div + canvas）
+    AppState.vm.setScreenContainer(DOM['screen_container']);
 
     AppState.vm.onStateChange = (state) => {
         updateStatus(state);
@@ -61,11 +84,6 @@ function initVM() {
         addLog(message, type);
     };
 
-    AppState.vm.onFrameUpdate = () => {
-        // 帧更新回调
-    };
-
-    // 更新配置显示
     updateConfigDisplay();
 }
 
@@ -109,10 +127,14 @@ function initEventListeners() {
         btn.addEventListener('click', () => toggleModifier(btn.dataset.key));
     });
 
-    // 画布触摸事件
-    initCanvasTouch();
+    // screen_container 点击锁定鼠标（v86 自动处理鼠标）
+    DOM['screen_container'].addEventListener('click', () => {
+        if (AppState.vm && AppState.vm.isRunning) {
+            AppState.vm.lockMouse();
+        }
+    });
 
-    // 键盘事件
+    // 物理键盘
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('keyup', handleKeyUp);
 
@@ -129,11 +151,7 @@ function initEventListeners() {
 // 启动虚拟机
 async function startVM() {
     if (AppState.vm.isRunning) return;
-
-    const success = await AppState.vm.start();
-    if (success) {
-        addLog('Windows 10 已启动，可以点击「显示桌面」查看', 'success');
-    }
+    await AppState.vm.start();
 }
 
 // 停止虚拟机
@@ -150,10 +168,18 @@ function openDisplay() {
     }
     DOM['display-overlay'].style.display = 'flex';
     AppState.isDisplayOpen = true;
+
     // 尝试全屏
     if (DOM['display-overlay'].requestFullscreen) {
         DOM['display-overlay'].requestFullscreen().catch(() => {});
     }
+
+    // 锁定鼠标
+    setTimeout(() => {
+        if (AppState.vm && AppState.vm.isRunning) {
+            AppState.vm.lockMouse();
+        }
+    }, 500);
 }
 
 // 关闭显示层
@@ -181,7 +207,7 @@ async function createDisk() {
     try {
         const exists = await AppState.storage.diskExists('windows10.img');
         if (exists) {
-            if (!confirm('系统盘已存在，是否覆盖？这将删除所有数据。')) {
+            if (!confirm(`系统盘已存在（${sizeGB}GB），是否覆盖？\n这将删除所有已安装的系统和数据！`)) {
                 hideProgress();
                 return;
             }
@@ -212,16 +238,18 @@ async function handleIsoSelect(event) {
 
     const sizeGB = (file.size / 1024 / 1024 / 1024).toFixed(2);
     addLog(`正在导入 ISO: ${file.name} (${sizeGB} GB)...`);
+    addLog('大文件导入可能需要几分钟，请耐心等待...');
 
     try {
         const result = await AppState.storage.importIso(file, (percent, name) => {
-            showProgress(`正在导入 ${name}...`, percent);
+            showProgress(`正在导入 ${name}... ${percent}%`, percent);
         });
 
         AppState.vm.config.cdromPath = result.name;
         AppState.vm.saveConfig();
 
         addLog(`ISO 导入完成: ${result.name}`, 'success');
+        addLog('请在设置中开启「从光驱启动」后再启动虚拟机', 'info');
         updateStorageInfo();
         setTimeout(hideProgress, 1500);
     } catch (error) {
@@ -241,6 +269,10 @@ function saveSettings() {
     AppState.vm.saveConfig();
     updateConfigDisplay();
     addLog('设置已保存', 'success');
+
+    if (config.bootFromCd) {
+        addLog('已设置从光驱启动，下次启动将进入 Windows 安装', 'info');
+    }
 
     DOM['settings-panel'].style.display = 'none';
 }
@@ -327,6 +359,11 @@ function addLog(message, type = 'info') {
     line.textContent = `[${time}] ${message}`;
     DOM['log-output'].appendChild(line);
     DOM['log-output'].scrollTop = DOM['log-output'].scrollHeight;
+
+    // 限制日志行数
+    while (DOM['log-output'].children.length > 200) {
+        DOM['log-output'].removeChild(DOM['log-output'].firstChild);
+    }
 }
 
 // 显示进度
@@ -343,111 +380,6 @@ function hideProgress() {
 
 // === 输入处理 ===
 
-// 初始化画布触摸
-function initCanvasTouch() {
-    const canvas = DOM['vm-screen'];
-    let lastX = 0, lastY = 0;
-    let touchStartTime = 0;
-    let touchMoved = false;
-
-    canvas.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        const touch = e.touches[0];
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        lastX = Math.round((touch.clientX - rect.left) * scaleX);
-        lastY = Math.round((touch.clientY - rect.top) * scaleY);
-        touchStartTime = Date.now();
-        touchMoved = false;
-
-        // 鼠标移动 + 左键按下
-        sendMouseMove(lastX, lastY);
-        sendMouseButton(1, true);
-    }, { passive: false });
-
-    canvas.addEventListener('touchmove', (e) => {
-        e.preventDefault();
-        const touch = e.touches[0];
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const x = Math.round((touch.clientX - rect.left) * scaleX);
-        const y = Math.round((touch.clientY - rect.top) * scaleY);
-
-        if (Math.abs(x - lastX) > 2 || Math.abs(y - lastY) > 2) {
-            touchMoved = true;
-        }
-        sendMouseMove(x, y);
-        lastX = x;
-        lastY = y;
-    }, { passive: false });
-
-    canvas.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        // 左键释放
-        sendMouseButton(1, false);
-
-        // 短按 = 单击（已通过按下/释放完成）
-        // 长按 = 右键
-        if (!touchMoved && Date.now() - touchStartTime > 500) {
-            sendRightClick();
-        }
-    }, { passive: false });
-
-    // 双指捏合缩放
-    let initialPinchDistance = 0;
-    canvas.addEventListener('touchstart', (e) => {
-        if (e.touches.length === 2) {
-            initialPinchDistance = getPinchDistance(e.touches);
-        }
-    });
-
-    canvas.addEventListener('touchmove', (e) => {
-        if (e.touches.length === 2) {
-            e.preventDefault();
-            const distance = getPinchDistance(e.touches);
-            const scale = distance / initialPinchDistance;
-            // 可以在这里实现画布缩放
-        }
-    }, { passive: false });
-}
-
-function getPinchDistance(touches) {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-// 发送鼠标移动
-function sendMouseMove(x, y) {
-    if (AppState.vm && AppState.vm.emulator) {
-        AppState.vm.sendMouseEvent(x, y);
-    }
-}
-
-// 发送鼠标按钮
-function sendMouseButton(button, pressed) {
-    if (AppState.vm && AppState.vm.emulator) {
-        // v86 的 mouse_button 接受位掩码: 1=左, 2=右, 4=中
-        AppState.vm.emulator.mouse_button(pressed ? button : 0);
-    }
-}
-
-// 发送右键
-function sendRightClick() {
-    if (AppState.vm && AppState.vm.emulator) {
-        AppState.vm.emulator.mouse_button(2);
-        setTimeout(() => AppState.vm.emulator.mouse_button(0), 100);
-    }
-}
-
-// 发送 Esc
-function sendEsc() {
-    sendKey(0x01, true);
-    setTimeout(() => sendKey(0x01, false), 50);
-}
-
 // 切换修饰键
 function toggleModifier(key) {
     AppState.modifierKeys[key] = !AppState.modifierKeys[key];
@@ -456,75 +388,52 @@ function toggleModifier(key) {
         btn.classList.toggle('active', AppState.modifierKeys[key]);
     }
 
-    // 发送按键
     const scancodes = { ctrl: 0x1D, alt: 0x38, shift: 0x2A, win: 0x5B };
-    if (scancodes[key]) {
-        sendKey(scancodes[key], AppState.modifierKeys[key]);
-    }
-}
-
-// 发送键盘事件
-function sendKey(scancode, pressed) {
-    if (AppState.vm && AppState.vm.emulator) {
-        // v86 使用 set_keycode，需要发送 make/break 码
-        if (pressed) {
-            AppState.vm.emulator.keyboard_send_scancode(scancode);
+    if (scancodes[key] && AppState.vm) {
+        if (AppState.modifierKeys[key]) {
+            AppState.vm.sendKeyDown(scancodes[key]);
         } else {
-            AppState.vm.emulator.keyboard_send_scancode(scancode | 0x80);
+            AppState.vm.sendKeyUp(scancodes[key]);
         }
     }
 }
 
-// 处理物理键盘
+// 发送右键
+function sendRightClick() {
+    addLog('提示: 在屏幕上双指点击 = 鼠标右键', 'info');
+}
+
+// 发送 Esc
+function sendEsc() {
+    if (AppState.vm) {
+        AppState.vm.sendKey(SCANCODES['Escape']);
+    }
+}
+
+// 处理物理键盘按下
 function handleKeyDown(e) {
     if (!AppState.isDisplayOpen) return;
     e.preventDefault();
 
-    const scancode = keyToScancode(e.key);
-    if (scancode !== null) {
-        sendKey(scancode, true);
+    const scancode = SCANCODES[e.key];
+    if (scancode !== undefined && AppState.vm) {
+        AppState.vm.sendKeyDown(scancode);
     }
 }
 
+// 处理物理键盘释放
 function handleKeyUp(e) {
     if (!AppState.isDisplayOpen) return;
     e.preventDefault();
 
-    const scancode = keyToScancode(e.key);
-    if (scancode !== null) {
-        sendKey(scancode, false);
+    const scancode = SCANCODES[e.key];
+    if (scancode !== undefined && AppState.vm) {
+        AppState.vm.sendKeyUp(scancode);
     }
-}
-
-// 键码映射 (PS/2 扫描码 set 1)
-function keyToScancode(key) {
-    const map = {
-        'Escape': 0x01, '1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05,
-        '5': 0x06, '6': 0x07, '7': 0x08, '8': 0x09, '9': 0x0A, '0': 0x0B,
-        '-': 0x0C, '=': 0x0D, 'Backspace': 0x0E, 'Tab': 0x0F,
-        'q': 0x10, 'w': 0x11, 'e': 0x12, 'r': 0x13, 't': 0x14,
-        'y': 0x15, 'u': 0x16, 'i': 0x17, 'o': 0x18, 'p': 0x19,
-        '[': 0x1A, ']': 0x1B, 'Enter': 0x1C, 'Control': 0x1D,
-        'a': 0x1E, 's': 0x1F, 'd': 0x20, 'f': 0x21, 'g': 0x22,
-        'h': 0x23, 'j': 0x24, 'k': 0x25, 'l': 0x26, ';': 0x27,
-        "'": 0x28, '`': 0x29, 'Shift': 0x2A, '\\': 0x2B,
-        'z': 0x2C, 'x': 0x2D, 'c': 0x2E, 'v': 0x2F, 'b': 0x30,
-        'n': 0x31, 'm': 0x32, ',': 0x33, '.': 0x34, '/': 0x35,
-        ' ': 0x39, 'CapsLock': 0x3A,
-        'F1': 0x3B, 'F2': 0x3C, 'F3': 0x3D, 'F4': 0x3E,
-        'F5': 0x3F, 'F6': 0x40, 'F7': 0x41, 'F8': 0x42,
-        'F9': 0x43, 'F10': 0x44, 'F11': 0x57, 'F12': 0x58,
-        'ArrowUp': 0x48, 'ArrowDown': 0x50, 'ArrowLeft': 0x4B, 'ArrowRight': 0x4D,
-        'Home': 0x47, 'End': 0x4F, 'PageUp': 0x49, 'PageDown': 0x51,
-        'Insert': 0x52, 'Delete': 0x53,
-        'Meta': 0x5B, 'Alt': 0x38
-    };
-    return map[key] || null;
 }
 
 // 切换软键盘
 function toggleKeyboard() {
-    // 聚焦到隐藏输入框以唤起软键盘
     let input = document.getElementById('hidden-keyboard-input');
     if (!input) {
         input = document.createElement('input');
@@ -532,6 +441,7 @@ function toggleKeyboard() {
         input.style.position = 'fixed';
         input.style.opacity = '0';
         input.style.pointerEvents = 'none';
+        input.style.top = '-100px';
         document.body.appendChild(input);
     }
     input.focus();
@@ -539,19 +449,17 @@ function toggleKeyboard() {
 
 // === PWA 相关 ===
 
-// 注册 Service Worker
 async function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
         try {
-            const registration = await navigator.serviceWorker.register('service-worker.js');
-            console.log('[PWA] Service Worker 注册成功:', registration.scope);
+            await navigator.serviceWorker.register('service-worker.js');
+            console.log('[PWA] Service Worker 注册成功');
         } catch (error) {
             console.log('[PWA] Service Worker 注册失败:', error);
         }
     }
 }
 
-// 检查安装提示
 function checkInstallPrompt() {
     const dismissed = localStorage.getItem('install_prompt_dismissed');
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
@@ -560,16 +468,9 @@ function checkInstallPrompt() {
     if (!dismissed && !isStandalone) {
         setTimeout(() => {
             DOM['install-prompt'].style.display = 'flex';
-        }, 3000);
+        }, 5000);
     }
 }
-
-// 监听安装提示事件
-let deferredPrompt = null;
-window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredPrompt = e;
-});
 
 // 导出调试
 window.AppState = AppState;

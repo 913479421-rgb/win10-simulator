@@ -190,7 +190,11 @@
                 </button>
             </div>
             <div class="display-container">
-                <canvas id="vm-screen" class="vm-screen"></canvas>
+                <!-- v86 screen_container: 必须包含 div(文本模式) + canvas(图形模式) -->
+                <div id="screen_container" class="screen-container">
+                    <div class="v86-text-mode" style="white-space: pre; font: 14px monospace; line-height: 14px; color: #aaa;"></div>
+                    <canvas class="v86-graphics-mode" style="display: none;"></canvas>
+                </div>
             </div>
             <div class="display-controls">
                 <button class="ctrl-btn" data-key="ctrl">Ctrl</button>
@@ -223,6 +227,7 @@
 
     <!-- 脚本 -->
     <script src="js/storage.js"></script>
+    <script src="js/indexeddb-buffer.js"></script>
     <script src="js/vm.js"></script>
     <script src="js/vnc.js"></script>
     <script src="js/app.js"></script>

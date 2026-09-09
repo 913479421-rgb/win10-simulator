@@ -1,6 +1,6 @@
 /**
  * 虚拟机管理器
- * 基于 WebAssembly (v86/QEMU-WASM) 在浏览器中运行真实 x86 Windows 10
+ * 基于 WebAssembly (v86) 在浏览器中运行真实 x86 Windows 10
  * 使用手机 RAM 作为虚拟机内存，IndexedDB 存储虚拟磁盘
  */
 class VMManager {
@@ -12,26 +12,23 @@ class VMManager {
     this.onStateChange = null;
     this.onFrameUpdate = null;
     this.onLog = null;
-    this._screenCanvas = null;
-    this._screenCtx = null;
-    this._imageData = null;
+    this._screenContainer = null;
+    this._hdaBuffer = null;
+    this._cdromBuffer = null;
   }
 
   // 默认配置 - 针对手机浏览器内存限制优化
   getDefaultConfig() {
     return {
-      memorySize: 512,         // 内存 MB (手机浏览器限制，建议 256-1024)
-      vgaMemorySize: 16,       // 显存 MB
-      cpuCount: 1,             // CPU 核心数 (WASM 通常单核)
-      diskSize: 16 * 1024,     // 磁盘大小 MB (16GB，避免存储压力)
+      memorySize: 512,         // 内存 MB (必须是 2 的幂: 256/512/1024)
+      vgaMemorySize: 8,        // 显存 MB
+      diskSize: 16 * 1024,     // 磁盘大小 MB (16GB)
       cdromPath: '',           // ISO 路径
       hdaPath: 'windows10.img', // 系统盘文件名
       bootFromCd: false,       // 从光驱启动
-      enableNetwork: true,     // 网络
-      enableAudio: false,      // 音频
+      enableNetwork: false,    // 网络（需要 websockproxy，默认关闭）
       acpi: true,              // ACPI
-      vga: 'cirrus',           // 显卡类型 (cirrus 兼容性最好)
-      wasmUrl: 'https://copy.sh/v86/v86.wasm',  // WASM 引擎地址
+      wasmUrl: 'https://copy.sh/v86/v86.wasm',
       biosUrl: 'https://copy.sh/v86/bios/seabios.bin',
       vgabiosUrl: 'https://copy.sh/v86/bios/vgabios.bin'
     };
@@ -50,34 +47,9 @@ class VMManager {
     localStorage.setItem('win10_vm_config', JSON.stringify(this.config));
   }
 
-  // 检查手机可用内存
-  async getAvailableMemory() {
-    if (navigator.deviceMemory) {
-      return navigator.deviceMemory * 1024; // GB -> MB
-    }
-    // 估算：根据设备性能
-    if (navigator.hardwareConcurrency >= 8) return 4096;
-    if (navigator.hardwareConcurrency >= 4) return 2048;
-    return 1024;
-  }
-
-  // 检查可用存储
-  async getAvailableStorage() {
-    if (navigator.storage && navigator.storage.estimate) {
-      const estimate = await navigator.storage.estimate();
-      return {
-        quota: estimate.quota,
-        usage: estimate.usage,
-        available: estimate.quota - estimate.usage
-      };
-    }
-    return { quota: -1, usage: -1, available: -1 };
-  }
-
-  // 设置屏幕画布
-  setScreenCanvas(canvas) {
-    this._screenCanvas = canvas;
-    this._screenCtx = canvas.getContext('2d');
+  // 设置屏幕容器（v86 需要 screen_container，包含 div + canvas）
+  setScreenContainer(container) {
+    this._screenContainer = container;
   }
 
   // 日志
@@ -105,91 +77,62 @@ class VMManager {
         this.log(`虚拟磁盘已创建: ${this.config.diskSize / 1024} GB`);
       }
 
-      // 2. 获取磁盘元数据（不加载整个磁盘内容）
-      this.log('正在准备虚拟磁盘（异步按需加载）...');
+      // 2. 获取磁盘元数据
+      this.log('正在准备虚拟磁盘...');
       const diskInfo = await this.storageManager.getDiskInfo(this.config.hdaPath);
       const diskSize = diskInfo ? diskInfo.size : (this.config.diskSize * 1024 * 1024);
 
-      // 创建异步磁盘接口 - 按需从 IndexedDB 读取块，避免内存溢出
-      const self = this;
-      const asyncDisk = {
-        async: true,
-        size: diskSize,
-        get_disk: function(offset, length, callback) {
-          self.storageManager.readDiskRange(self.config.hdaPath, offset, length)
-            .then(data => callback(data))
-            .catch(err => {
-              console.error('磁盘读取错误:', err);
-              callback(new Uint8Array(length)); // 返回空数据
-            });
-        },
-        set_disk: function(offset, data, callback) {
-          self.storageManager.writeDiskRange(self.config.hdaPath, offset, data)
-            .then(() => callback())
-            .catch(err => {
-              console.error('磁盘写入错误:', err);
-              callback();
-            });
-        }
-      };
+      // 3. 创建 IndexedDBBuffer（实现 v86 buffer 接口，按需读写）
+      this._hdaBuffer = new IndexedDBBuffer(this.storageManager, this.config.hdaPath, diskSize, false);
 
-      // 3. 准备启动参数
+      // 4. 准备启动参数
       const emulatorOptions = {
+        wasm_path: this.config.wasmUrl,
         memory_size: this.config.memorySize * 1024 * 1024,
         vga_memory_size: this.config.vgaMemorySize * 1024 * 1024,
-        screen: {
-          canvas: this._screenCanvas,
-          context: this._screenCtx
-        },
-        hda: asyncDisk,
+        screen_container: this._screenContainer,
         bios: { url: this.config.biosUrl },
         vga_bios: { url: this.config.vgabiosUrl },
-        wasm_path: this.config.wasmUrl,
+        hda: { buffer: this._hdaBuffer },
         acpi: this.config.acpi,
-        network_relay_url: this.config.enableNetwork ? null : undefined,
-        uart1: {
-          receive: (data) => {
-            // 串口输出
-          }
-        },
         autostart: true
       };
 
-      // 4. 如果有 ISO，挂载光驱（ISO 也用异步接口）
+      // 5. 如果有 ISO，挂载光驱
       if (this.config.cdromPath && this.config.bootFromCd) {
-        this.log('正在准备 ISO 镜像（异步加载）...');
+        this.log('正在准备 ISO 镜像...');
         const isoInfo = await this.storageManager.getIsoInfo(this.config.cdromPath);
         const isoSize = isoInfo ? isoInfo.size : 0;
 
-        const asyncCdrom = {
-          async: true,
-          size: isoSize,
-          get_disk: function(offset, length, callback) {
-            self.storageManager.readDiskRange(self.config.cdromPath, offset, length, true)
-              .then(data => callback(data))
-              .catch(err => {
-                console.error('ISO 读取错误:', err);
-                callback(new Uint8Array(length));
-              });
-          }
-        };
-        emulatorOptions.cdrom = asyncCdrom;
-        emulatorOptions.boot_order = 0x13; // 从光驱启动
+        if (isoSize > 0) {
+          this._cdromBuffer = new IndexedDBBuffer(this.storageManager, this.config.cdromPath, isoSize, true);
+          emulatorOptions.cdrom = { buffer: this._cdromBuffer };
+          emulatorOptions.boot_order = 0x13; // CD-ROM first
+          this.log(`ISO 已挂载: ${this.config.cdromPath} (${(isoSize / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+        } else {
+          this.log('ISO 未找到，从硬盘启动', 'warn');
+          emulatorOptions.boot_order = 0x11; // HDD first
+        }
       } else {
-        emulatorOptions.boot_order = 0x11; // 从硬盘启动
+        emulatorOptions.boot_order = 0x11; // HDD first
       }
 
-      // 5. 加载 v86 引擎
+      // 6. 网络（需要 websockproxy 服务器，默认关闭）
+      if (this.config.enableNetwork && this.config.networkRelayUrl) {
+        emulatorOptions.network_relay_url = this.config.networkRelayUrl;
+      }
+
+      // 7. 加载 v86 引擎
       this.log('正在加载 WebAssembly 虚拟化引擎...');
       await this.loadV86Engine();
 
-      // 6. 创建模拟器实例
+      // 8. 创建模拟器实例
       this.log('正在初始化虚拟机...');
       this.emulator = new V86Starter(emulatorOptions);
 
-      // 7. 绑定事件
+      // 9. 绑定事件
       this.emulator.add_listener('emulator-ready', () => {
-        this.log('虚拟机已就绪');
+        this.log('虚拟机已就绪，正在启动 Windows...');
         this.isRunning = true;
         this._setState('running');
       });
@@ -202,32 +145,31 @@ class VMManager {
 
       this.emulator.add_listener('screen-set-size', (data) => {
         this.log(`屏幕分辨率: ${data.width}x${data.height}`);
-        if (this._screenCanvas) {
-          this._screenCanvas.width = data.width;
-          this._screenCanvas.height = data.height;
-        }
       });
 
       this.emulator.add_listener('screen-update', () => {
         if (this.onFrameUpdate) this.onFrameUpdate();
       });
 
-      // 8. 等待启动
+      // 10. 等待启动（v86 加载 BIOS 和 WASM 可能需要时间）
       await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('启动超时')), 120000);
+        const timeout = setTimeout(() => reject(new Error('启动超时（可能是 WASM 加载失败，请检查网络）')), 180000);
         this.emulator.add_listener('emulator-ready', () => {
           clearTimeout(timeout);
           resolve();
         });
       });
 
-      this.log('Windows 10 启动成功！');
+      this.log('Windows 10 启动中，请耐心等待...');
       return true;
 
     } catch (error) {
       this.log(`启动失败: ${error.message}`, 'error');
       this._setState('error');
-      this.emulator = null;
+      if (this.emulator) {
+        try { this.emulator.stop(); } catch (e) {}
+        this.emulator = null;
+      }
       return false;
     }
   }
@@ -242,16 +184,12 @@ class VMManager {
     this._setState('stopping');
 
     try {
-      // 异步磁盘模式下，数据已实时写入 IndexedDB，无需额外保存
-      this.log('磁盘数据已实时保存');
-
-      // 停止模拟器
+      // v86 只有 stop() 方法，没有 destroy()
       this.emulator.stop();
-      this.emulator.destroy();
       this.emulator = null;
       this.isRunning = false;
       this._setState('stopped');
-      this.log('虚拟机已关闭');
+      this.log('虚拟机已关闭，磁盘数据已保存在 IndexedDB');
     } catch (error) {
       this.log(`关闭时出错: ${error.message}`, 'error');
     }
@@ -265,27 +203,46 @@ class VMManager {
     }
   }
 
-  // 发送键盘事件
-  sendKeyEvent(scancode, pressed) {
+  // 发送键盘扫描码（v86 使用 keyboard_send_scancodes 数组）
+  sendScancodes(codes) {
     if (this.emulator) {
-      this.emulator.keyboard_send_scancode(scancode);
+      this.emulator.keyboard_send_scancodes(codes);
     }
   }
 
-  // 发送鼠标事件
-  sendMouseEvent(x, y, buttons) {
+  // 发送单个按键（按下+释放）
+  sendKey(scancode) {
     if (this.emulator) {
-      this.emulator.mouse_move(x, y);
-      if (buttons !== undefined) {
-        this.emulator.mouse_button(buttons);
-      }
+      // make code + break code (OR 0x80)
+      this.emulator.keyboard_send_scancodes([scancode, scancode | 0x80]);
+    }
+  }
+
+  // 发送按键按下
+  sendKeyDown(scancode) {
+    if (this.emulator) {
+      this.emulator.keyboard_send_scancodes([scancode]);
+    }
+  }
+
+  // 发送按键释放
+  sendKeyUp(scancode) {
+    if (this.emulator) {
+      this.emulator.keyboard_send_scancodes([scancode | 0x80]);
+    }
+  }
+
+  // 鼠标锁定（v86 通过 screen_container 自动处理鼠标，点击后锁定）
+  lockMouse() {
+    if (this.emulator && this.emulator.lock_mouse) {
+      this.emulator.lock_mouse();
     }
   }
 
   // 加载 v86 引擎
   async loadV86Engine() {
     if (typeof V86Starter !== 'undefined') {
-      return; // 已加载
+      return;
     }
 
     return new Promise((resolve, reject) => {
@@ -295,7 +252,7 @@ class VMManager {
         this.log('v86 引擎加载完成');
         resolve();
       };
-      script.onerror = () => reject(new Error('无法加载 v86 引擎'));
+      script.onerror = () => reject(new Error('无法加载 v86 引擎 (libv86.js)，请检查网络连接'));
       document.head.appendChild(script);
     });
   }
@@ -310,8 +267,7 @@ class VMManager {
     return {
       running: this.isRunning,
       memoryAllocated: this.config.memorySize,
-      diskSize: this.config.diskSize,
-      cpuCores: this.config.cpuCount
+      diskSize: this.config.diskSize
     };
   }
 }
