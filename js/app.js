@@ -230,27 +230,33 @@ async function autoStartIfInstalled() {
         // 检查系统盘是否存在
         const diskExists = await AppState.storage.diskExists('windows10.img');
         if (!diskExists) {
-            addLog('未检测到已安装的系统，请先创建磁盘并安装 Windows', 'info');
-            return;
-        }
-
-        // 检查是否从光驱启动（如果是，说明还在安装阶段，不自动启动）
-        if (AppState.vm.config.bootFromCd) {
-            addLog('检测到系统处于安装模式（从光驱启动），不自动启动', 'info');
+            addLog('未创建虚拟磁盘，请先点击「创建虚拟磁盘」', 'info');
             return;
         }
 
         // 检查磁盘是否有数据（已安装系统）
         const diskInfo = await AppState.storage.getDiskInfo('windows10.img');
-        if (!diskInfo) {
+        const hasData = diskInfo ? await checkDiskHasData(diskInfo.id) : false;
+
+        if (!hasData) {
+            // 系统未安装
+            if (AppState.vm.config.cdromPath) {
+                addLog('系统盘为空，检测到 ISO 镜像', 'info');
+                addLog('请点击「启动 Windows 10」开始安装系统', 'info');
+                addLog('安装完成后请关闭虚拟机，取消「从光驱启动」后再启动', 'warn');
+            } else {
+                addLog('系统盘为空，请先导入 Windows ISO 镜像', 'info');
+            }
             return;
         }
 
-        // 检查是否有已写入的数据块
-        const hasData = await checkDiskHasData(diskInfo.id);
-        if (!hasData) {
-            addLog('系统盘为空，请先安装 Windows 10', 'info');
-            return;
+        // 系统已安装
+        if (AppState.vm.config.bootFromCd) {
+            // 自动切换到硬盘启动
+            addLog('检测到已安装的系统，自动切换为硬盘启动...', 'info');
+            AppState.vm.config.bootFromCd = false;
+            AppState.vm.saveConfig();
+            updateConfigDisplay();
         }
 
         addLog('检测到已安装的 Windows 系统，正在自动启动...', 'info');
@@ -259,7 +265,7 @@ async function autoStartIfInstalled() {
         // 自动启动虚拟机
         const started = await AppState.vm.start();
         if (started) {
-            // 延迟打开显示层（等待 BIOS 初始化完成）
+            // 延迟打开显示层
             setTimeout(() => {
                 openDisplay();
                 addLog('Windows 桌面已显示', 'success');

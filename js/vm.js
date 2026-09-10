@@ -23,17 +23,17 @@ class VMManager {
     this._currentProgress = 0;
   }
 
-  // 默认配置 - 高性能优化版
+  // 默认配置 - 针对 Windows 精简版 (Tiny10) 优化
   getDefaultConfig() {
     return {
-      memorySize: 1024,        // 内存 MB（1GB，提升启动和运行速度）
-      vgaMemorySize: 16,       // 显存 MB（16MB，提升显示性能）
-      diskSize: 16 * 1024,     // 磁盘大小 MB (16GB)
+      memorySize: 512,         // 内存 MB（精简版 512MB 足够运行）
+      vgaMemorySize: 8,        // 显存 MB
+      diskSize: 16 * 1024,     // 磁盘大小 MB (16GB，精简版安装后约 5GB)
       cdromPath: '',           // ISO 路径
       hdaPath: 'windows10.img', // 系统盘文件名
-      bootFromCd: false,       // 从光驱启动
-      enableNetwork: false,    // 网络（需要 websockproxy，默认关闭）
-      acpi: true,              // ACPI（快速启动支持）
+      bootFromCd: true,        // 默认从光驱启动（首次安装）
+      enableNetwork: false,    // 网络
+      acpi: true,              // ACPI
       wasmUrl: 'v86/v86.wasm',
       biosUrl: 'v86/bios/seabios.bin',
       vgabiosUrl: 'v86/bios/vgabios.bin'

@@ -11,7 +11,7 @@
     <title>Win10 模拟器</title>
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
-    <link rel="stylesheet" href="css/style.css?v=20260910-v3">
+    <link rel="stylesheet" href="css/style.css?v=20260910-v4">
 </head>
 <body>
     <!-- 主界面 -->
@@ -135,6 +135,21 @@
                         </svg>
                         一键下载并导入
                     </button>
+                </div>
+                <div class="iso-tip" style="margin-top: 12px; padding: 10px; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">
+                    <p style="font-size: 13px; color: #856404; margin: 0 0 6px 0; font-weight: 600;">💡 推荐使用 Windows 精简版 (Tiny10)</p>
+                    <p style="font-size: 12px; color: #856404; margin: 0;">
+                        模拟器中运行完整版 Windows 10 会非常慢。推荐使用 <strong>Tiny10</strong>（基于 Win10 LTSC 精简）：
+                    </p>
+                    <ul style="font-size: 12px; color: #856404; margin: 6px 0 0 0; padding-left: 20px;">
+                        <li>安装后仅占 <strong>~5GB</strong> 磁盘空间（完整版约 15GB）</li>
+                        <li>启动速度快 <strong>3-5 倍</strong></li>
+                        <li>内存需求低，<strong>512MB</strong> 即可流畅运行</li>
+                        <li>移除不必要组件，模拟器中更稳定</li>
+                    </ul>
+                    <p style="font-size: 12px; color: #856404; margin: 8px 0 0 0;">
+                        搜索 "Tiny10 ISO 下载" 获取精简版镜像，下载后点击上方"选择 Windows ISO"导入。
+                    </p>
                 </div>
                 <div class="iso-presets" id="iso-presets" style="margin-top: 12px; display: none;">
                     <p style="font-size: 13px; color: #888; margin: 0 0 8px 0;">检测到已下载的官方镜像：</p>
@@ -272,12 +287,12 @@
     </div>
 
     <!-- 脚本 -->
-    <script src="v86/libv86.js?v=20260910-v3"></script>
-    <script src="js/storage.js?v=20260910-v3"></script>
-    <script src="js/indexeddb-buffer.js?v=20260910-v3"></script>
-    <script src="js/vm.js?v=20260910-v3"></script>
-    <script src="js/vnc.js?v=20260910-v3"></script>
-    <script src="js/app.js?v=20260910-v3"></script>
-    <script src="js/worker.js?v=20260910-v3"></script>
+    <script src="v86/libv86.js?v=20260910-v4"></script>
+    <script src="js/storage.js?v=20260910-v4"></script>
+    <script src="js/indexeddb-buffer.js?v=20260910-v4"></script>
+    <script src="js/vm.js?v=20260910-v4"></script>
+    <script src="js/vnc.js?v=20260910-v4"></script>
+    <script src="js/app.js?v=20260910-v4"></script>
+    <script src="js/worker.js?v=20260910-v4"></script>
 </body>
 </html>
