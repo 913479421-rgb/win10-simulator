@@ -93,7 +93,7 @@ class VMManager {
         screen_container: this._screenContainer,
         bios: { url: this.config.biosUrl },
         vga_bios: { url: this.config.vgabiosUrl },
-        hda: { buffer: this._hdaBuffer },
+        hda: this._hdaBuffer,  // 直接传入 buffer 对象（v86 调用 .get_and_cache/.set）
         acpi: this.config.acpi,
         autostart: true
       };
@@ -106,7 +106,7 @@ class VMManager {
 
         if (isoSize > 0) {
           this._cdromBuffer = new IndexedDBBuffer(this.storageManager, this.config.cdromPath, isoSize, true);
-          emulatorOptions.cdrom = { buffer: this._cdromBuffer };
+          emulatorOptions.cdrom = this._cdromBuffer;  // 直接传入 buffer 对象
           emulatorOptions.boot_order = 0x13; // CD-ROM first
           this.log(`ISO 已挂载: ${this.config.cdromPath} (${(isoSize / 1024 / 1024 / 1024).toFixed(2)} GB)`);
         } else {
@@ -126,9 +126,10 @@ class VMManager {
       this.log('正在加载 WebAssembly 虚拟化引擎...');
       await this.loadV86Engine();
 
-      // 8. 创建模拟器实例
+      // 8. 创建模拟器实例（兼容 V86 和 V86Starter）
       this.log('正在初始化虚拟机...');
-      this.emulator = new V86Starter(emulatorOptions);
+      const V86Class = typeof V86 !== 'undefined' ? V86 : V86Starter;
+      this.emulator = new V86Class(emulatorOptions);
 
       // 9. 绑定事件
       this.emulator.add_listener('emulator-ready', () => {
@@ -241,7 +242,8 @@ class VMManager {
 
   // 加载 v86 引擎（已在 HTML 中直接引入，这里做兼容性检查）
   async loadV86Engine() {
-    if (typeof V86Starter !== 'undefined') {
+    // npm 版本导出 V86，旧版导出 V86Starter，两者都检查
+    if (typeof V86 !== 'undefined' || typeof V86Starter !== 'undefined') {
       return;
     }
 
