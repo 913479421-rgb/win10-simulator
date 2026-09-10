@@ -1,5 +1,5 @@
 // Service Worker - 离线缓存支持
-const CACHE_NAME = 'win10-simulator-v3';
+const CACHE_NAME = 'win10-simulator-v4';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -43,15 +43,18 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-//  fetch：缓存优先策略
+// fetch：网络优先策略（确保加载最新版本）
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
   // 只缓存 GET 请求
   if (request.method !== 'GET') return;
 
-  // 对于 WASM 和大文件，使用网络优先（避免缓存过大）
-  if (request.url.includes('.wasm') || request.url.includes('.bin') || request.url.includes('.iso')) {
+  // 对于 HTML、JS、CSS 文件，使用网络优先（确保最新版本）
+  if (request.mode === 'navigate' || 
+      request.url.includes('.js') || 
+      request.url.includes('.css') ||
+      request.url.includes('.html')) {
     event.respondWith(
       fetch(request)
         .then((response) => {
@@ -67,7 +70,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 其他资源：缓存优先，网络回退
+  // 对于 WASM、BIOS、图片等静态资源，使用缓存优先
   event.respondWith(
     caches.match(request)
       .then((cachedResponse) => {
