@@ -126,9 +126,13 @@ class VMManager {
       this.log('正在加载 WebAssembly 虚拟化引擎...');
       await this.loadV86Engine();
 
-      // 8. 创建模拟器实例（兼容 V86 和 V86Starter）
+      // 8. 获取 v86 构造函数（兼容多种导出方式）
       this.log('正在初始化虚拟机...');
-      const V86Class = typeof V86 !== 'undefined' ? V86 : V86Starter;
+      const V86Class = this._getV86Constructor();
+      if (!V86Class) {
+        throw new Error('v86 引擎加载失败：V86 和 V86Starter 均未定义。请刷新页面重试，或检查网络连接。');
+      }
+      this.log(`使用引擎: ${V86Class.name || 'V86'}`);
       this.emulator = new V86Class(emulatorOptions);
 
       // 9. 绑定事件
@@ -242,22 +246,57 @@ class VMManager {
 
   // 加载 v86 引擎（已在 HTML 中直接引入，这里做兼容性检查）
   async loadV86Engine() {
-    // npm 版本导出 V86，旧版导出 V86Starter，两者都检查
-    if (typeof V86 !== 'undefined' || typeof V86Starter !== 'undefined') {
+    // 检查是否已定义
+    if (this._getV86Constructor()) {
+      this.log('v86 引擎已加载');
       return;
     }
 
     // 回退：动态加载本地文件
+    this.log('正在动态加载 v86 引擎...');
     return new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = 'v86/libv86.js';
       script.onload = () => {
-        this.log('v86 引擎加载完成');
-        resolve();
+        if (this._getV86Constructor()) {
+          this.log('v86 引擎加载完成');
+          resolve();
+        } else {
+          reject(new Error('v86 引擎加载后仍未找到 V86/V86Starter 构造函数'));
+        }
       };
-      script.onerror = () => reject(new Error('无法加载 v86 引擎 (v86/libv86.js)'));
+      script.onerror = () => reject(new Error('无法加载 v86 引擎 (v86/libv86.js)，请检查网络连接'));
       document.head.appendChild(script);
     });
+  }
+
+  // 安全获取 v86 构造函数（兼容多种导出方式）
+  _getV86Constructor() {
+    // 方式1: 全局变量 V86（npm 版本）
+    if (typeof V86 !== 'undefined' && V86) {
+      return V86;
+    }
+    // 方式2: 全局变量 V86Starter（旧版本）
+    if (typeof V86Starter !== 'undefined' && V86Starter) {
+      return V86Starter;
+    }
+    // 方式3: window.V86
+    if (typeof window !== 'undefined' && window.V86) {
+      return window.V86;
+    }
+    // 方式4: window.V86Starter
+    if (typeof window !== 'undefined' && window.V86Starter) {
+      return window.V86Starter;
+    }
+    // 方式5: 全局对象上的任何 v86 相关属性
+    if (typeof globalThis !== 'undefined') {
+      for (const key of Object.keys(globalThis)) {
+        if (/v86/i.test(key) && typeof globalThis[key] === 'function') {
+          return globalThis[key];
+        }
+      }
+    }
+    return null;
   }
 
   // 设置状态
