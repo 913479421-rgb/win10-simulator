@@ -23,14 +23,14 @@ class VMManager {
     this._currentProgress = 0;
   }
 
-  // 默认配置 - 针对 Windows 精简版 (Tiny10) 优化
+  // 默认配置 - 针对 Tiny11 (Windows 11 精简版 x64) 优化
   getDefaultConfig() {
     return {
-      memorySize: 512,         // 内存 MB（精简版 512MB 足够运行）
-      vgaMemorySize: 8,        // 显存 MB
-      diskSize: 16 * 1024,     // 磁盘大小 MB (16GB，精简版安装后约 5GB)
+      memorySize: 1024,        // 内存 MB（Tiny11 64位至少需要 1GB，推荐 2GB）
+      vgaMemorySize: 16,       // 显存 MB
+      diskSize: 32 * 1024,     // 磁盘大小 MB (32GB，Tiny11 安装后约 8-10GB)
       cdromPath: '',           // ISO 路径
-      hdaPath: 'windows10.img', // 系统盘文件名
+      hdaPath: 'windows11.img', // 系统盘文件名
       bootFromCd: true,        // 默认从光驱启动（首次安装）
       enableNetwork: false,    // 网络
       acpi: true,              // ACPI

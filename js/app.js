@@ -228,21 +228,21 @@ async function startVM() {
 async function autoStartIfInstalled() {
     try {
         // 检查系统盘是否存在
-        const diskExists = await AppState.storage.diskExists('windows10.img');
+        const diskExists = await AppState.storage.diskExists('windows11.img');
         if (!diskExists) {
             addLog('未创建虚拟磁盘，请先点击「创建虚拟磁盘」', 'info');
             return;
         }
 
         // 检查磁盘是否有数据（已安装系统）
-        const diskInfo = await AppState.storage.getDiskInfo('windows10.img');
+        const diskInfo = await AppState.storage.getDiskInfo('windows11.img');
         const hasData = diskInfo ? await checkDiskHasData(diskInfo.id) : false;
 
         if (!hasData) {
             // 系统未安装
             if (AppState.vm.config.cdromPath) {
                 addLog('系统盘为空，检测到 ISO 镜像', 'info');
-                addLog('请点击「启动 Windows 10」开始安装系统', 'info');
+                addLog('请点击「启动 Windows 11」开始安装系统', 'info');
                 addLog('安装完成后请关闭虚拟机，取消「从光驱启动」后再启动', 'warn');
             } else {
                 addLog('系统盘为空，请先导入 Windows ISO 镜像', 'info');
@@ -260,7 +260,7 @@ async function autoStartIfInstalled() {
         }
 
         addLog('检测到已安装的 Windows 系统，正在自动启动...', 'info');
-        addLog('提示：首次启动加载较慢，请耐心等待', 'info');
+        addLog('提示：Tiny11 是 64位系统，首次启动较慢，请耐心等待', 'info');
 
         // 自动启动虚拟机
         const started = await AppState.vm.start();
@@ -269,7 +269,7 @@ async function autoStartIfInstalled() {
             setTimeout(() => {
                 openDisplay();
                 addLog('Windows 桌面已显示', 'success');
-            }, 3000);
+            }, 5000);
         }
     } catch (error) {
         console.error('自动启动失败:', error);
