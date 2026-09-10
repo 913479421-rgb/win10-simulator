@@ -54,18 +54,25 @@
                     </div>
                     <div class="stat">
                         <span class="stat-label">磁盘大小</span>
-                        <span class="stat-value" id="stat-disk">32 GB</span>
+                        <span class="stat-value" id="stat-disk">16 GB</span>
                     </div>
                     <div class="stat">
-                        <span class="stat-label">手机可用存储</span>
-                        <span class="stat-value" id="stat-storage">检测中...</span>
+                        <span class="stat-label">运行时间</span>
+                        <span class="stat-value" id="stat-uptime">00:00</span>
                     </div>
                 </div>
                 <div class="progress-container" id="progress-container" style="display:none;">
+                    <div class="progress-header">
+                        <span class="progress-stage" id="progress-stage">准备中...</span>
+                        <span class="progress-percent" id="progress-percent">0%</span>
+                    </div>
                     <div class="progress-bar">
                         <div class="progress-fill" id="progress-fill"></div>
                     </div>
-                    <span class="progress-text" id="progress-text">正在加载...</span>
+                    <div class="progress-footer">
+                        <span class="progress-text" id="progress-text">正在初始化...</span>
+                        <span class="progress-elapsed" id="progress-elapsed">0.0s</span>
+                    </div>
                 </div>
             </section>
 
@@ -265,11 +272,12 @@
     </div>
 
     <!-- 脚本 -->
-    <script src="v86/libv86.js?v=20260910-v2"></script>
-    <script src="js/storage.js?v=20260910-v2"></script>
-    <script src="js/indexeddb-buffer.js?v=20260910-v2"></script>
-    <script src="js/vm.js?v=20260910-v2"></script>
-    <script src="js/vnc.js?v=20260910-v2"></script>
-    <script src="js/app.js?v=20260910-v2"></script>
+    <script src="v86/libv86.js?v=20260910-v3"></script>
+    <script src="js/storage.js?v=20260910-v3"></script>
+    <script src="js/indexeddb-buffer.js?v=20260910-v3"></script>
+    <script src="js/vm.js?v=20260910-v3"></script>
+    <script src="js/vnc.js?v=20260910-v3"></script>
+    <script src="js/app.js?v=20260910-v3"></script>
+    <script src="js/worker.js?v=20260910-v3"></script>
 </body>
 </html>

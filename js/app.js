@@ -112,10 +112,27 @@ function initVM() {
     AppState.vm.onStateChange = (state) => {
         updateStatus(state);
         updateButtons(state);
+        if (state === 'starting') {
+            showProgress('正在启动...', 0);
+        } else if (state === 'running') {
+            setTimeout(hideProgress, 3000);
+        } else if (state === 'error' || state === 'stopped') {
+            hideProgress();
+        }
     };
 
     AppState.vm.onLog = (message, type) => {
         addLog(message, type);
+    };
+
+    // 启动进度回调
+    AppState.vm.onProgress = (data) => {
+        updateBootProgress(data);
+    };
+
+    // 实时状态回调
+    AppState.vm.onStats = (stats) => {
+        updateRealtimeStats(stats);
     };
 
     updateConfigDisplay();
@@ -635,6 +652,27 @@ function showProgress(text, percent) {
     DOM['progress-container'].style.display = 'block';
     DOM['progress-text'].textContent = text;
     DOM['progress-fill'].style.width = percent + '%';
+    DOM['progress-percent'].textContent = percent + '%';
+}
+
+// 更新启动进度（详细）
+function updateBootProgress(data) {
+    DOM['progress-container'].style.display = 'block';
+    DOM['progress-stage'].textContent = data.stage || '启动中...';
+    DOM['progress-text'].textContent = data.stage || '启动中...';
+    DOM['progress-percent'].textContent = Math.round(data.percent) + '%';
+    DOM['progress-fill'].style.width = data.percent + '%';
+    DOM['progress-elapsed'].textContent = data.elapsed + 's';
+}
+
+// 更新实时状态
+function updateRealtimeStats(stats) {
+    if (stats.uptime !== undefined) {
+        const mins = Math.floor(stats.uptime / 60);
+        const secs = stats.uptime % 60;
+        DOM['stat-uptime'].textContent = 
+            String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+    }
 }
 
 // 隐藏进度

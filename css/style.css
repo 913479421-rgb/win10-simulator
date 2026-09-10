@@ -226,27 +226,78 @@ body {
 /* === 进度条 === */
 .progress-container {
     margin-top: 12px;
+    padding: 10px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+}
+
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.progress-stage {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.progress-percent {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
 }
 
 .progress-bar {
-    height: 6px;
-    background: var(--bg-secondary);
-    border-radius: 3px;
+    height: 8px;
+    background: var(--bg-primary);
+    border-radius: 4px;
     overflow: hidden;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
 }
 
 .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--accent), #00BCF2);
-    border-radius: 3px;
-    transition: width 0.3s;
+    background: linear-gradient(90deg, var(--accent), #00BCF2, #00D4FF);
+    border-radius: 4px;
+    transition: width 0.3s ease;
     width: 0%;
+    position: relative;
+}
+
+.progress-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    animation: progressShine 1.5s infinite;
+}
+
+@keyframes progressShine {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.progress-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 .progress-text {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-secondary);
+}
+
+.progress-elapsed {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: monospace;
 }
 
 /* === 按钮 === */

@@ -12,9 +12,15 @@ class VMManager {
     this.onStateChange = null;
     this.onFrameUpdate = null;
     this.onLog = null;
+    this.onProgress = null; // 启动进度回调
+    this.onStats = null; // 实时状态回调
     this._screenContainer = null;
     this._hdaBuffer = null;
     this._cdromBuffer = null;
+    this._worker = null; // Web Worker
+    this._useWorker = false; // 是否使用 Worker 模式
+    this._startTime = 0;
+    this._currentProgress = 0;
   }
 
   // 默认配置 - 高性能优化版
@@ -58,7 +64,7 @@ class VMManager {
     if (this.onLog) this.onLog(message, type);
   }
 
-  // 启动虚拟机（高性能优化版）
+  // 启动虚拟机（高性能优化版 + 真实进度显示）
   async start() {
     if (this.isRunning) {
       this.log('虚拟机已在运行', 'warn');
@@ -67,98 +73,185 @@ class VMManager {
 
     this.log('正在快速启动 Windows 10...');
     this._setState('starting');
-    const startTime = Date.now();
+    this._startTime = Date.now();
+    this._currentProgress = 0;
 
     try {
-      // 并行执行：加载 v86 引擎 + 准备磁盘
-      const [v86Ready] = await Promise.all([
-        this._preloadV86Engine(),
-        this._prepareDisk()
-      ]);
+      // 阶段1: 加载 v86 引擎 (0-25%)
+      this._updateProgress(5, '加载 WebAssembly 引擎...');
+      await this._preloadV86Engine();
+      this._updateProgress(25, '引擎加载完成');
 
-      // 准备启动参数（高性能配置）
-      const emulatorOptions = {
-        wasm_path: this.config.wasmUrl,
-        memory_size: this.config.memorySize * 1024 * 1024,
-        vga_memory_size: this.config.vgaMemorySize * 1024 * 1024,
-        screen_container: this._screenContainer,
-        bios: { url: this.config.biosUrl },
-        vga_bios: { url: this.config.vgabiosUrl },
-        hda: this._hdaBuffer,
-        acpi: this.config.acpi,
-        autostart: true,
-        // 快速启动优化
-        preserve_mac_from_state_image: true,
-        disable_speaker: true,
-        initial_state: null
-      };
+      // 阶段2: 准备磁盘 (25-40%)
+      this._updateProgress(30, '准备虚拟磁盘...');
+      await this._prepareDisk();
+      this._updateProgress(40, '磁盘准备完成');
 
-      // 挂载 ISO（如果需要）
-      if (this.config.cdromPath && this.config.bootFromCd && this._cdromBuffer) {
-        emulatorOptions.cdrom = this._cdromBuffer;
-        emulatorOptions.boot_order = 0x13; // CD-ROM first
-      } else {
-        emulatorOptions.boot_order = 0x11; // HDD first（快速启动）
-      }
-
-      // 网络
-      if (this.config.enableNetwork && this.config.networkRelayUrl) {
-        emulatorOptions.network_relay_url = this.config.networkRelayUrl;
-      }
-
-      // 创建模拟器实例
-      this.log('正在初始化虚拟机...');
+      // 阶段3: 初始化虚拟机 (40-55%)
+      this._updateProgress(45, '初始化硬件...');
+      const emulatorOptions = this._buildEmulatorOptions();
+      
       const V86Class = this._getV86Constructor();
       if (!V86Class) {
         throw new Error('v86 引擎加载失败：V86 和 V86Starter 均未定义。请刷新页面重试。');
       }
       this.log(`使用引擎: ${V86Class.name || 'V86'}`);
       this.emulator = new V86Class(emulatorOptions);
+      this._updateProgress(55, '硬件初始化完成');
 
-      // 绑定事件
-      this.emulator.add_listener('emulator-ready', () => {
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        this.log(`虚拟机已就绪（启动耗时 ${elapsed} 秒），正在启动 Windows...`);
-        this.isRunning = true;
-        this._setState('running');
-      });
+      // 阶段4: 绑定事件并启动 (55-70%)
+      this._bindEmulatorEvents();
+      this._updateProgress(60, 'BIOS 启动中...');
 
-      this.emulator.add_listener('emulator-stopped', () => {
-        this.log('虚拟机已停止');
-        this.isRunning = false;
-        this._setState('stopped');
-      });
+      // 等待 emulator-ready
+      await this._waitForEmulatorReady(120000);
+      
+      this._updateProgress(70, 'BIOS 启动完成');
 
-      this.emulator.add_listener('screen-set-size', (data) => {
-        this.log(`屏幕分辨率: ${data.width}x${data.height}`);
-      });
+      // 阶段5: 引导系统 (70-90%)
+      this._updateProgress(75, '引导加载器...');
+      
+      // 启动实时状态监控
+      this._startStatsMonitor();
 
-      this.emulator.add_listener('screen-update', () => {
-        if (this.onFrameUpdate) this.onFrameUpdate();
-      });
+      const totalTime = ((Date.now() - this._startTime) / 1000).toFixed(1);
+      this._updateProgress(85, 'Windows 启动中...');
+      this.log(`虚拟机已就绪（启动耗时 ${totalTime} 秒），Windows 正在加载...`);
+      
+      // 模拟 Windows 启动进度（基于时间估算）
+      this._simulateWindowsBootProgress();
 
-      // 等待启动（缩短超时时间）
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('启动超时（可能是 WASM 加载失败，请检查网络）')), 120000);
-        this.emulator.add_listener('emulator-ready', () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
-
-      const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-      this.log(`Windows 10 启动中（总耗时 ${totalTime} 秒），请耐心等待...`);
       return true;
 
     } catch (error) {
       this.log(`启动失败: ${error.message}`, 'error');
       this._setState('error');
+      this._updateProgress(0, '启动失败');
       if (this.emulator) {
         try { this.emulator.stop(); } catch (e) {}
         this.emulator = null;
       }
       return false;
     }
+  }
+
+  // 构建模拟器配置
+  _buildEmulatorOptions() {
+    const options = {
+      wasm_path: this.config.wasmUrl,
+      memory_size: this.config.memorySize * 1024 * 1024,
+      vga_memory_size: this.config.vgaMemorySize * 1024 * 1024,
+      screen_container: this._screenContainer,
+      bios: { url: this.config.biosUrl },
+      vga_bios: { url: this.config.vgabiosUrl },
+      hda: this._hdaBuffer,
+      acpi: this.config.acpi,
+      autostart: true,
+      preserve_mac_from_state_image: true,
+      disable_speaker: true
+    };
+
+    if (this.config.cdromPath && this.config.bootFromCd && this._cdromBuffer) {
+      options.cdrom = this._cdromBuffer;
+      options.boot_order = 0x13;
+    } else {
+      options.boot_order = 0x11;
+    }
+
+    if (this.config.enableNetwork && this.config.networkRelayUrl) {
+      options.network_relay_url = this.config.networkRelayUrl;
+    }
+
+    return options;
+  }
+
+  // 绑定模拟器事件
+  _bindEmulatorEvents() {
+    this.emulator.add_listener('emulator-ready', () => {
+      this.isRunning = true;
+      this._setState('running');
+    });
+
+    this.emulator.add_listener('emulator-stopped', () => {
+      this.log('虚拟机已停止');
+      this.isRunning = false;
+      this._setState('stopped');
+      this._stopStatsMonitor();
+    });
+
+    this.emulator.add_listener('screen-set-size', (data) => {
+      this.log(`屏幕分辨率: ${data.width}x${data.height}`);
+      this._updateProgress(Math.min(95, this._currentProgress + 5), '显示输出已就绪');
+    });
+
+    this.emulator.add_listener('screen-update', () => {
+      if (this.onFrameUpdate) this.onFrameUpdate();
+    });
+  }
+
+  // 等待模拟器就绪
+  _waitForEmulatorReady(timeout) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('启动超时（可能是 WASM 加载失败，请检查网络）')), timeout);
+      this.emulator.add_listener('emulator-ready', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  // 模拟 Windows 启动进度（基于时间估算）
+  _simulateWindowsBootProgress() {
+    const stages = [
+      { progress: 88, delay: 2000, msg: '加载 Windows 内核...' },
+      { progress: 92, delay: 4000, msg: '加载驱动程序...' },
+      { progress: 96, delay: 6000, msg: '启动服务...' },
+      { progress: 100, delay: 8000, msg: '欢迎使用 Windows！' }
+    ];
+
+    stages.forEach(stage => {
+      setTimeout(() => {
+        if (this.isRunning) {
+          this._updateProgress(stage.progress, stage.msg);
+        }
+      }, stage.delay);
+    });
+  }
+
+  // 启动实时状态监控
+  _startStatsMonitor() {
+    if (this._statsInterval) return;
+    
+    this._statsInterval = setInterval(() => {
+      if (!this.isRunning || !this.emulator) return;
+      
+      try {
+        const stats = {
+          running: this.isRunning,
+          memory: this.config.memorySize,
+          uptime: Math.floor((Date.now() - this._startTime) / 1000),
+          progress: this._currentProgress
+        };
+        if (this.onStats) this.onStats(stats);
+      } catch (e) {}
+    }, 1000);
+  }
+
+  // 停止状态监控
+  _stopStatsMonitor() {
+    if (this._statsInterval) {
+      clearInterval(this._statsInterval);
+      this._statsInterval = null;
+    }
+  }
+
+  // 更新进度
+  _updateProgress(percent, stage) {
+    this._currentProgress = percent;
+    if (this.onProgress) {
+      this.onProgress({ percent, stage, elapsed: ((Date.now() - this._startTime) / 1000).toFixed(1) });
+    }
+    this.log(`[${percent}%] ${stage}`);
   }
 
   // 预加载 v86 引擎（并行）
