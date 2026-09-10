@@ -17,17 +17,17 @@ class VMManager {
     this._cdromBuffer = null;
   }
 
-  // 默认配置 - 针对手机浏览器内存限制优化
+  // 默认配置 - 高性能优化版
   getDefaultConfig() {
     return {
-      memorySize: 512,         // 内存 MB (必须是 2 的幂: 256/512/1024)
-      vgaMemorySize: 8,        // 显存 MB
+      memorySize: 1024,        // 内存 MB（1GB，提升启动和运行速度）
+      vgaMemorySize: 16,       // 显存 MB（16MB，提升显示性能）
       diskSize: 16 * 1024,     // 磁盘大小 MB (16GB)
       cdromPath: '',           // ISO 路径
       hdaPath: 'windows10.img', // 系统盘文件名
       bootFromCd: false,       // 从光驱启动
       enableNetwork: false,    // 网络（需要 websockproxy，默认关闭）
-      acpi: true,              // ACPI
+      acpi: true,              // ACPI（快速启动支持）
       wasmUrl: 'v86/v86.wasm',
       biosUrl: 'v86/bios/seabios.bin',
       vgabiosUrl: 'v86/bios/vgabios.bin'
@@ -58,34 +58,25 @@ class VMManager {
     if (this.onLog) this.onLog(message, type);
   }
 
-  // 启动虚拟机
+  // 启动虚拟机（高性能优化版）
   async start() {
     if (this.isRunning) {
       this.log('虚拟机已在运行', 'warn');
       return false;
     }
 
-    this.log('正在启动 Windows 10 虚拟机...');
+    this.log('正在快速启动 Windows 10...');
     this._setState('starting');
+    const startTime = Date.now();
 
     try {
-      // 1. 检查系统盘是否存在
-      const diskExists = await this.storageManager.diskExists(this.config.hdaPath);
-      if (!diskExists) {
-        this.log('系统盘不存在，正在创建...');
-        await this.storageManager.createDisk(this.config.hdaPath, this.config.diskSize);
-        this.log(`虚拟磁盘已创建: ${this.config.diskSize / 1024} GB`);
-      }
+      // 并行执行：加载 v86 引擎 + 准备磁盘
+      const [v86Ready] = await Promise.all([
+        this._preloadV86Engine(),
+        this._prepareDisk()
+      ]);
 
-      // 2. 获取磁盘元数据
-      this.log('正在准备虚拟磁盘...');
-      const diskInfo = await this.storageManager.getDiskInfo(this.config.hdaPath);
-      const diskSize = diskInfo ? diskInfo.size : (this.config.diskSize * 1024 * 1024);
-
-      // 3. 创建 IndexedDBBuffer（实现 v86 buffer 接口，按需读写）
-      this._hdaBuffer = new IndexedDBBuffer(this.storageManager, this.config.hdaPath, diskSize, false);
-
-      // 4. 准备启动参数
+      // 准备启动参数（高性能配置）
       const emulatorOptions = {
         wasm_path: this.config.wasmUrl,
         memory_size: this.config.memorySize * 1024 * 1024,
@@ -93,51 +84,41 @@ class VMManager {
         screen_container: this._screenContainer,
         bios: { url: this.config.biosUrl },
         vga_bios: { url: this.config.vgabiosUrl },
-        hda: this._hdaBuffer,  // 直接传入 buffer 对象（v86 调用 .get_and_cache/.set）
+        hda: this._hdaBuffer,
         acpi: this.config.acpi,
-        autostart: true
+        autostart: true,
+        // 快速启动优化
+        preserve_mac_from_state_image: true,
+        disable_speaker: true,
+        initial_state: null
       };
 
-      // 5. 如果有 ISO，挂载光驱
-      if (this.config.cdromPath && this.config.bootFromCd) {
-        this.log('正在准备 ISO 镜像...');
-        const isoInfo = await this.storageManager.getIsoInfo(this.config.cdromPath);
-        const isoSize = isoInfo ? isoInfo.size : 0;
-
-        if (isoSize > 0) {
-          this._cdromBuffer = new IndexedDBBuffer(this.storageManager, this.config.cdromPath, isoSize, true);
-          emulatorOptions.cdrom = this._cdromBuffer;  // 直接传入 buffer 对象
-          emulatorOptions.boot_order = 0x13; // CD-ROM first
-          this.log(`ISO 已挂载: ${this.config.cdromPath} (${(isoSize / 1024 / 1024 / 1024).toFixed(2)} GB)`);
-        } else {
-          this.log('ISO 未找到，从硬盘启动', 'warn');
-          emulatorOptions.boot_order = 0x11; // HDD first
-        }
+      // 挂载 ISO（如果需要）
+      if (this.config.cdromPath && this.config.bootFromCd && this._cdromBuffer) {
+        emulatorOptions.cdrom = this._cdromBuffer;
+        emulatorOptions.boot_order = 0x13; // CD-ROM first
       } else {
-        emulatorOptions.boot_order = 0x11; // HDD first
+        emulatorOptions.boot_order = 0x11; // HDD first（快速启动）
       }
 
-      // 6. 网络（需要 websockproxy 服务器，默认关闭）
+      // 网络
       if (this.config.enableNetwork && this.config.networkRelayUrl) {
         emulatorOptions.network_relay_url = this.config.networkRelayUrl;
       }
 
-      // 7. 加载 v86 引擎
-      this.log('正在加载 WebAssembly 虚拟化引擎...');
-      await this.loadV86Engine();
-
-      // 8. 获取 v86 构造函数（兼容多种导出方式）
+      // 创建模拟器实例
       this.log('正在初始化虚拟机...');
       const V86Class = this._getV86Constructor();
       if (!V86Class) {
-        throw new Error('v86 引擎加载失败：V86 和 V86Starter 均未定义。请刷新页面重试，或检查网络连接。');
+        throw new Error('v86 引擎加载失败：V86 和 V86Starter 均未定义。请刷新页面重试。');
       }
       this.log(`使用引擎: ${V86Class.name || 'V86'}`);
       this.emulator = new V86Class(emulatorOptions);
 
-      // 9. 绑定事件
+      // 绑定事件
       this.emulator.add_listener('emulator-ready', () => {
-        this.log('虚拟机已就绪，正在启动 Windows...');
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        this.log(`虚拟机已就绪（启动耗时 ${elapsed} 秒），正在启动 Windows...`);
         this.isRunning = true;
         this._setState('running');
       });
@@ -156,16 +137,17 @@ class VMManager {
         if (this.onFrameUpdate) this.onFrameUpdate();
       });
 
-      // 10. 等待启动（v86 加载 BIOS 和 WASM 可能需要时间）
+      // 等待启动（缩短超时时间）
       await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('启动超时（可能是 WASM 加载失败，请检查网络）')), 180000);
+        const timeout = setTimeout(() => reject(new Error('启动超时（可能是 WASM 加载失败，请检查网络）')), 120000);
         this.emulator.add_listener('emulator-ready', () => {
           clearTimeout(timeout);
           resolve();
         });
       });
 
-      this.log('Windows 10 启动中，请耐心等待...');
+      const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+      this.log(`Windows 10 启动中（总耗时 ${totalTime} 秒），请耐心等待...`);
       return true;
 
     } catch (error) {
@@ -177,6 +159,42 @@ class VMManager {
       }
       return false;
     }
+  }
+
+  // 预加载 v86 引擎（并行）
+  async _preloadV86Engine() {
+    this.log('正在加载 WebAssembly 虚拟化引擎...');
+    await this.loadV86Engine();
+    return true;
+  }
+
+  // 准备磁盘（并行）
+  async _prepareDisk() {
+    // 检查系统盘
+    const diskExists = await this.storageManager.diskExists(this.config.hdaPath);
+    if (!diskExists) {
+      this.log('系统盘不存在，正在创建...');
+      await this.storageManager.createDisk(this.config.hdaPath, this.config.diskSize);
+      this.log(`虚拟磁盘已创建: ${this.config.diskSize / 1024} GB`);
+    }
+
+    this.log('正在准备虚拟磁盘...');
+    const diskInfo = await this.storageManager.getDiskInfo(this.config.hdaPath);
+    const diskSize = diskInfo ? diskInfo.size : (this.config.diskSize * 1024 * 1024);
+    this._hdaBuffer = new IndexedDBBuffer(this.storageManager, this.config.hdaPath, diskSize, false);
+
+    // 准备 ISO（如果需要）
+    if (this.config.cdromPath && this.config.bootFromCd) {
+      this.log('正在准备 ISO 镜像...');
+      const isoInfo = await this.storageManager.getIsoInfo(this.config.cdromPath);
+      const isoSize = isoInfo ? isoInfo.size : 0;
+      if (isoSize > 0) {
+        this._cdromBuffer = new IndexedDBBuffer(this.storageManager, this.config.cdromPath, isoSize, true);
+        this.log(`ISO 已挂载: ${this.config.cdromPath} (${(isoSize / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+      }
+    }
+
+    return true;
   }
 
   // 停止虚拟机

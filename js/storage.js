@@ -8,7 +8,7 @@ class StorageManager {
     this.dbName = 'Win10Simulator';
     this.dbVersion = 1;
     this.db = null;
-    this.chunkSize = 4 * 1024 * 1024; // 4MB 分块
+    this.chunkSize = 8 * 1024 * 1024; // 8MB 分块（提升读写性能）
   }
 
   // 打开数据库

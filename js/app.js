@@ -62,9 +62,24 @@ document.addEventListener('DOMContentLoaded', () => {
     checkInstallPrompt();
     registerServiceWorker();
 
+    // 页面加载时立即预加载 v86 引擎（加快后续启动速度）
+    preloadV86Engine();
+
     // 自动启动检测：如果已有已安装的系统，自动启动并显示桌面
-    setTimeout(autoStartIfInstalled, 1000);
+    setTimeout(autoStartIfInstalled, 500);
 });
+
+// 预加载 v86 引擎（页面加载时立即执行）
+async function preloadV86Engine() {
+    try {
+        if (AppState.vm) {
+            await AppState.vm.loadV86Engine();
+            console.log('[性能] v86 引擎预加载完成');
+        }
+    } catch (e) {
+        console.warn('[性能] v86 引擎预加载失败:', e.message);
+    }
+}
 
 // 初始化 DOM 引用
 function initDOM() {

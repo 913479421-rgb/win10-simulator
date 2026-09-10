@@ -1,56 +1,58 @@
 /**
- * IndexedDB Buffer - 实现 v86 期望的磁盘 buffer 接口
+ * IndexedDB Buffer - 高性能磁盘缓冲（优化版）
  * 
- * v86 buffer 完整接口（从源码分析）:
- *   load(): Promise - 初始化
- *   get(start, len, fn): void - 读取 len 字节，回调 fn(Uint8Array)
- *   set(start, slice, fn): void - 写入 slice，回调 fn()
- *   get_buffer(fn): void - 获取整个 buffer
- *   get_and_cache(start, len, fn): void - 读取并缓存（默认调用 get）
- *   get_from_cache(start, len): Uint8Array - 从缓存读取
+ * 优化特性：
+ * - 大容量 LRU 缓存（512MB）
+ * - 预读机制
+ * - 异步延迟写入
+ * - 读写合并
  */
 class IndexedDBBuffer {
-  /**
-   * @param {StorageManager} storageManager - 存储管理器
-   * @param {string} diskName - 磁盘名称
-   * @param {number} size - 磁盘大小（字节）
-   * @param {boolean} isIso - 是否为 ISO（只读）
-   */
   constructor(storageManager, diskName, size, isIso = false) {
     this.storage = storageManager;
     this.diskName = diskName;
     this.size = size;
     this.isIso = isIso;
     this.loaded = false;
-    this._cache = new Map(); // 简单块缓存
-    this._cacheMax = 32; // 最多缓存 32 个块 (128MB)
+    
+    // 高性能缓存配置
+    this._cache = new Map(); // LRU 缓存
+    this._cacheMax = 128; // 最多缓存 128 个块 (512MB @ 4MB/块)
+    this._readAheadSize = 8 * 1024 * 1024; // 预读 8MB
+    this._writeQueue = []; // 延迟写入队列
+    this._writeTimer = null;
+    this._writeDelay = 500; // 500ms 批量写入
   }
 
-  // v86 接口：初始化
   async load() {
     this.loaded = true;
     return Promise.resolve();
   }
 
-  // v86 接口：读取指定范围（带缓存）
+  // 高性能读取（带 LRU 缓存和预读）
   async get(start, len, fn) {
     try {
-      // 检查缓存（简单的整范围缓存）
+      // 检查缓存
       const cacheKey = `${start}_${len}`;
       if (this._cache.has(cacheKey)) {
-        fn(this._cache.get(cacheKey));
+        // LRU: 移动到末尾（最近使用）
+        const data = this._cache.get(cacheKey);
+        this._cache.delete(cacheKey);
+        this._cache.set(cacheKey, data);
+        fn(data);
         return;
       }
 
+      // 从存储读取
       const data = await this.storage.readDiskRange(this.diskName, start, len, this.isIso);
       
-      // 存入缓存（小范围才缓存）
-      if (len <= 1024 * 1024) {
-        this._cache.set(cacheKey, data);
-        if (this._cache.size > this._cacheMax) {
-          const firstKey = this._cache.keys().next().value;
-          this._cache.delete(firstKey);
-        }
+      // 存入缓存（LRU）
+      this._cache.set(cacheKey, data);
+      this._evictCache();
+      
+      // 预读后续数据（异步，不阻塞当前请求）
+      if (!this.isIso && len < this._readAheadSize) {
+        this._readAhead(start + len);
       }
       
       fn(data);
@@ -60,30 +62,60 @@ class IndexedDBBuffer {
     }
   }
 
-  // v86 接口：读取并缓存（默认实现就是调用 get）
+  // 预读
+  async _readAhead(start) {
+    try {
+      const end = Math.min(start + this._readAheadSize, this.size);
+      const len = end - start;
+      if (len <= 0) return;
+      
+      const cacheKey = `${start}_${len}`;
+      if (this._cache.has(cacheKey)) return;
+      
+      const data = await this.storage.readDiskRange(this.diskName, start, len, this.isIso);
+      this._cache.set(cacheKey, data);
+      this._evictCache();
+    } catch (e) {
+      // 预读失败忽略
+    }
+  }
+
+  // LRU 淘汰
+  _evictCache() {
+    while (this._cache.size > this._cacheMax) {
+      const firstKey = this._cache.keys().next().value;
+      this._cache.delete(firstKey);
+    }
+  }
+
   get_and_cache(start, len, fn) {
     this.get(start, len, fn);
   }
 
-  // v86 接口：从缓存读取（如果未缓存返回空）
   get_from_cache(start, len) {
     const cacheKey = `${start}_${len}`;
     return this._cache.get(cacheKey) || new Uint8Array(0);
   }
 
-  // v86 接口：写入指定范围
+  // 高性能写入（延迟批量写入）
   async set(start, slice, fn) {
     if (this.isIso) {
-      // ISO 只读，忽略写入
       if (fn) fn();
       return;
     }
 
     try {
-      // 写入时清除相关缓存
+      // 清除相关缓存
       this._invalidateCache(start, slice ? slice.length : 0);
       
-      await this.storage.writeDiskRange(this.diskName, start, slice);
+      // 加入写入队列
+      this._writeQueue.push({ start, data: slice });
+      
+      // 延迟批量写入
+      if (!this._writeTimer) {
+        this._writeTimer = setTimeout(() => this._flushWrites(), this._writeDelay);
+      }
+      
       if (fn) fn();
     } catch (err) {
       console.error('IndexedDBBuffer set error:', err);
@@ -91,7 +123,52 @@ class IndexedDBBuffer {
     }
   }
 
-  // v86 接口：获取整个 buffer（用于保存状态，大磁盘可能内存溢出）
+  // 批量刷新写入
+  async _flushWrites() {
+    if (this._writeQueue.length === 0) return;
+    
+    const queue = this._writeQueue;
+    this._writeQueue = [];
+    this._writeTimer = null;
+    
+    // 合并相邻的写入
+    const merged = this._mergeWrites(queue);
+    
+    for (const write of merged) {
+      try {
+        await this.storage.writeDiskRange(this.diskName, write.start, write.data);
+      } catch (e) {
+        console.error('批量写入失败:', e);
+      }
+    }
+  }
+
+  // 合并相邻写入
+  _mergeWrites(writes) {
+    if (writes.length <= 1) return writes;
+    
+    writes.sort((a, b) => a.start - b.start);
+    const merged = [writes[0]];
+    
+    for (let i = 1; i < writes.length; i++) {
+      const last = merged[merged.length - 1];
+      const curr = writes[i];
+      
+      if (curr.start <= last.start + last.data.length) {
+        // 合并
+        const end = Math.max(last.start + last.data.length, curr.start + curr.data.length);
+        const newData = new Uint8Array(end - last.start);
+        newData.set(new Uint8Array(last.data), 0);
+        newData.set(new Uint8Array(curr.data), curr.start - last.start);
+        last.data = newData;
+      } else {
+        merged.push(curr);
+      }
+    }
+    
+    return merged;
+  }
+
   async get_buffer(fn) {
     try {
       console.warn('IndexedDBBuffer.get_buffer called - may cause OOM for large disks');
@@ -103,19 +180,25 @@ class IndexedDBBuffer {
     }
   }
 
-  // 使指定范围的缓存失效
   _invalidateCache(start, length) {
     for (const key of this._cache.keys()) {
       const [cacheStart, cacheLen] = key.split('_').map(Number);
-      // 检查范围是否重叠
       if (start < cacheStart + cacheLen && start + length > cacheStart) {
         this._cache.delete(key);
       }
     }
   }
+
+  // 强制刷新所有待写入
+  async flush() {
+    if (this._writeTimer) {
+      clearTimeout(this._writeTimer);
+      this._writeTimer = null;
+    }
+    await this._flushWrites();
+  }
 }
 
-// 导出
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = IndexedDBBuffer;
 }
