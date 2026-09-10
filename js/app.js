@@ -61,6 +61,9 @@ document.addEventListener('DOMContentLoaded', () => {
     updateStorageInfo();
     checkInstallPrompt();
     registerServiceWorker();
+
+    // 自动启动检测：如果已有已安装的系统，自动启动并显示桌面
+    setTimeout(autoStartIfInstalled, 1000);
 });
 
 // 初始化 DOM 引用
@@ -180,7 +183,83 @@ function initEventListeners() {
 // 启动虚拟机
 async function startVM() {
     if (AppState.vm.isRunning) return;
-    await AppState.vm.start();
+    const started = await AppState.vm.start();
+    if (started) {
+        // 延迟自动打开显示层
+        setTimeout(() => {
+            openDisplay();
+        }, 2000);
+    }
+}
+
+// 自动启动：如果已有已安装的系统，自动启动并显示桌面
+async function autoStartIfInstalled() {
+    try {
+        // 检查系统盘是否存在
+        const diskExists = await AppState.storage.diskExists('windows10.img');
+        if (!diskExists) {
+            addLog('未检测到已安装的系统，请先创建磁盘并安装 Windows', 'info');
+            return;
+        }
+
+        // 检查是否从光驱启动（如果是，说明还在安装阶段，不自动启动）
+        if (AppState.vm.config.bootFromCd) {
+            addLog('检测到系统处于安装模式（从光驱启动），不自动启动', 'info');
+            return;
+        }
+
+        // 检查磁盘是否有数据（已安装系统）
+        const diskInfo = await AppState.storage.getDiskInfo('windows10.img');
+        if (!diskInfo) {
+            return;
+        }
+
+        // 检查是否有已写入的数据块
+        const hasData = await checkDiskHasData(diskInfo.id);
+        if (!hasData) {
+            addLog('系统盘为空，请先安装 Windows 10', 'info');
+            return;
+        }
+
+        addLog('检测到已安装的 Windows 系统，正在自动启动...', 'info');
+        addLog('提示：首次启动加载较慢，请耐心等待', 'info');
+
+        // 自动启动虚拟机
+        const started = await AppState.vm.start();
+        if (started) {
+            // 延迟打开显示层（等待 BIOS 初始化完成）
+            setTimeout(() => {
+                openDisplay();
+                addLog('Windows 桌面已显示', 'success');
+            }, 3000);
+        }
+    } catch (error) {
+        console.error('自动启动失败:', error);
+        addLog(`自动启动失败: ${error.message}`, 'warn');
+    }
+}
+
+// 检查磁盘是否有数据（前几个块是否非空）
+async function checkDiskHasData(diskId) {
+    try {
+        // 检查前 10 个块是否有数据
+        for (let i = 0; i < 10; i++) {
+            const chunk = await AppState.storage._getChunk(diskId, i);
+            if (chunk && chunk.data) {
+                const data = new Uint8Array(chunk.data);
+                // 检查是否有非零字节
+                for (let j = 0; j < Math.min(data.length, 1024); j++) {
+                    if (data[j] !== 0) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    } catch (error) {
+        console.error('检查磁盘数据失败:', error);
+        return false;
+    }
 }
 
 // 停止虚拟机
