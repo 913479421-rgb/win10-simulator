@@ -11,6 +11,21 @@ const AppState = {
     modifierKeys: { ctrl: false, alt: false, shift: false, win: false }
 };
 
+// 官方 ISO 预配置
+const OFFICIAL_ISO = {
+    filename: 'Win10_22H2_Chinese_Simplified_x32v1.iso',
+    size: 4364279808,
+    version: 'Windows 10 22H2 简体中文 32位',
+    md5: '7b3e7deadde4b4d0df38d4d45f94c4d5',
+    downloadUrl: 'https://www.microsoft.com/zh-cn/software-download/windows10ISO',
+    // GitHub Release 分片下载
+    releaseParts: [
+        'https://github.com/913479421-rgb/win10-simulator/releases/download/v1.0.0-iso/Win10_22H2_x86_zh-CN.iso.part00',
+        'https://github.com/913479421-rgb/win10-simulator/releases/download/v1.0.0-iso/Win10_22H2_x86_zh-CN.iso.part01',
+        'https://github.com/913479421-rgb/win10-simulator/releases/download/v1.0.0-iso/Win10_22H2_x86_zh-CN.iso.part02'
+    ]
+};
+
 // DOM 元素
 const DOM = {};
 
@@ -61,7 +76,8 @@ function initDOM() {
         'log-output', 'btn-clear-log',
         'display-overlay', 'btn-close-display', 'btn-keyboard',
         'screen_container', 'btn-right-click', 'btn-esc',
-        'install-prompt', 'btn-dismiss-install'
+        'install-prompt', 'btn-dismiss-install',
+        'iso-presets', 'btn-use-preset-iso', 'btn-download-iso', 'btn-auto-download-iso'
     ];
     ids.forEach(id => {
         DOM[id] = document.getElementById(id);
@@ -104,6 +120,19 @@ function initEventListeners() {
     // 存储管理
     DOM['btn-create-disk'].addEventListener('click', createDisk);
     DOM['input-iso'].addEventListener('change', handleIsoSelect);
+
+    // 预配置 ISO
+    if (DOM['btn-use-preset-iso']) {
+        DOM['btn-use-preset-iso'].addEventListener('click', usePresetIso);
+    }
+
+    // 自动下载 ISO
+    if (DOM['btn-auto-download-iso']) {
+        DOM['btn-auto-download-iso'].addEventListener('click', autoDownloadAndImportIso);
+    }
+
+    // 检测已下载的官方 ISO
+    checkForDownloadedIso();
 
     // 设置
     DOM['setting-memory'].addEventListener('input', (e) => {
@@ -236,9 +265,24 @@ async function handleIsoSelect(event) {
         return;
     }
 
+    await importIsoFile(file);
+
+    // 重置 input，允许重复选择同一文件
+    event.target.value = '';
+}
+
+// 导入 ISO 文件（通用函数）
+async function importIsoFile(file) {
     const sizeGB = (file.size / 1024 / 1024 / 1024).toFixed(2);
     addLog(`正在导入 ISO: ${file.name} (${sizeGB} GB)...`);
-    addLog('大文件导入可能需要几分钟，请耐心等待...');
+    addLog('大文件导入可能需要几分钟，请耐心等待，请勿关闭页面...');
+
+    // 检查存储空间
+    const usage = await AppState.storage.getStorageUsage();
+    if (usage && usage.available < file.size) {
+        const availableGB = (usage.available / 1024 / 1024 / 1024).toFixed(1);
+        addLog(`警告: 手机可用存储不足 (${availableGB} GB)，导入可能失败`, 'warn');
+    }
 
     try {
         const result = await AppState.storage.importIso(file, (percent, name) => {
@@ -251,9 +295,135 @@ async function handleIsoSelect(event) {
         addLog(`ISO 导入完成: ${result.name}`, 'success');
         addLog('请在设置中开启「从光驱启动」后再启动虚拟机', 'info');
         updateStorageInfo();
+
+        // 隐藏预配置提示
+        if (DOM['iso-presets']) {
+            DOM['iso-presets'].style.display = 'none';
+        }
+
         setTimeout(hideProgress, 1500);
+        return true;
     } catch (error) {
         addLog(`ISO 导入失败: ${error.message}`, 'error');
+        addLog('请确保有足够的存储空间，并重试', 'warn');
+        hideProgress();
+        return false;
+    }
+}
+
+// 检测已下载的官方 ISO（通过检查 IndexedDB 中是否已有）
+async function checkForDownloadedIso() {
+    try {
+        const isos = await AppState.storage.listIsos();
+        const hasOfficial = isos.some(iso => iso.name === OFFICIAL_ISO.filename);
+
+        if (!hasOfficial && DOM['iso-presets']) {
+            // 显示预配置提示（用户需要先下载 ISO）
+            DOM['iso-presets'].style.display = 'block';
+        }
+    } catch (error) {
+        console.error('检测 ISO 失败', error);
+    }
+}
+
+// 使用预配置 ISO（触发文件选择器，用户选择已下载的文件）
+function usePresetIso() {
+    addLog(`请选择已下载的官方镜像: ${OFFICIAL_ISO.filename}`, 'info');
+    addLog(`版本: ${OFFICIAL_ISO.version} (约 4GB)`, 'info');
+    DOM['input-iso'].click();
+}
+
+// 自动下载并导入 ISO（从 GitHub Release 下载分片并合并）
+async function autoDownloadAndImportIso() {
+    // 检查是否已存在
+    const isos = await AppState.storage.listIsos();
+    const exists = isos.some(iso => iso.name === OFFICIAL_ISO.filename);
+    if (exists) {
+        if (!confirm('检测到已导入的官方 ISO，是否重新下载并覆盖？')) {
+            return;
+        }
+        // 删除旧的
+        for (const iso of isos) {
+            if (iso.name === OFFICIAL_ISO.filename) {
+                await AppState.storage.deleteDisk(iso.name);
+            }
+        }
+    }
+
+    addLog('开始自动下载 Windows 10 官方 ISO...', 'info');
+    addLog(`从 GitHub Release 下载 ${OFFICIAL_ISO.releaseParts.length} 个分片`, 'info');
+    addLog('总大小约 4GB，下载时间取决于网络速度，请耐心等待...', 'info');
+
+    try {
+        const parts = [];
+        let totalDownloaded = 0;
+        const totalSize = OFFICIAL_ISO.size;
+
+        // 逐个下载分片
+        for (let i = 0; i < OFFICIAL_ISO.releaseParts.length; i++) {
+            const url = OFFICIAL_ISO.releaseParts[i];
+            addLog(`正在下载分片 ${i + 1}/${OFFICIAL_ISO.releaseParts.length}...`, 'info');
+
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`下载分片 ${i + 1} 失败: HTTP ${response.status}`);
+            }
+
+            // 使用 ReadableStream 逐块读取，显示进度
+            const reader = response.body.getReader();
+            const chunks = [];
+            let partSize = 0;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                chunks.push(value);
+                partSize += value.length;
+                totalDownloaded += value.length;
+
+                const percent = Math.min(99, Math.round((totalDownloaded / totalSize) * 100));
+                showProgress(`正在下载 ISO... ${percent}% (${(totalDownloaded / 1024 / 1024 / 1024).toFixed(2)} GB)`, percent);
+            }
+
+            const partBlob = new Blob(chunks);
+            parts.push(partBlob);
+            addLog(`分片 ${i + 1} 下载完成 (${(partSize / 1024 / 1024).toFixed(0)} MB)`, 'success');
+        }
+
+        // 合并分片
+        addLog('正在合并分片...', 'info');
+        showProgress('正在合并 ISO 文件...', 99);
+        const mergedBlob = new Blob(parts, { type: 'application/octet-stream' });
+
+        // 验证大小
+        if (mergedBlob.size !== OFFICIAL_ISO.size) {
+            addLog(`警告: 合并后大小 (${mergedBlob.size}) 与预期 (${OFFICIAL_ISO.size}) 不符`, 'warn');
+        }
+
+        // 转换为 File 对象
+        const isoFile = new File([mergedBlob], OFFICIAL_ISO.filename, {
+            type: 'application/octet-stream',
+            lastModified: Date.now()
+        });
+
+        // 导入到 IndexedDB
+        addLog('正在导入到本地存储...', 'info');
+        const success = await importIsoFile(isoFile);
+
+        if (success) {
+            addLog('自动下载并导入完成！', 'success');
+            addLog('请在设置中开启「从光驱启动」后启动虚拟机', 'info');
+
+            // 隐藏预配置提示
+            if (DOM['iso-presets']) {
+                DOM['iso-presets'].style.display = 'none';
+            }
+        }
+
+    } catch (error) {
+        addLog(`自动下载失败: ${error.message}`, 'error');
+        addLog('请尝试手动从微软官网下载，然后通过「选择 Windows ISO」导入', 'warn');
         hideProgress();
     }
 }

@@ -115,6 +115,26 @@
                         <input type="file" id="input-iso" accept=".iso,.img" style="display:none;">
                     </label>
                 </div>
+                <div class="button-row" style="margin-top: 8px;">
+                    <a href="https://www.microsoft.com/zh-cn/software-download/windows10ISO" target="_blank" class="btn btn-outline" id="btn-download-iso">
+                        <svg viewBox="0 0 24 24" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">
+                            <path fill="currentColor" d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/>
+                        </svg>
+                        微软官网下载
+                    </a>
+                    <button id="btn-auto-download-iso" class="btn btn-primary">
+                        <svg viewBox="0 0 24 24" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">
+                            <path fill="currentColor" d="M12,3L2,12H5V20H19V12H22L12,3M12,8.75L15.5,12H13V16H11V12H8.5L12,8.75Z"/>
+                        </svg>
+                        一键下载并导入
+                    </button>
+                </div>
+                <div class="iso-presets" id="iso-presets" style="margin-top: 12px; display: none;">
+                    <p style="font-size: 13px; color: #888; margin: 0 0 8px 0;">检测到已下载的官方镜像：</p>
+                    <button id="btn-use-preset-iso" class="btn btn-primary btn-small">
+                        使用 Win10_22H2_Chinese_Simplified_x32v1.iso
+                    </button>
+                </div>
             </section>
 
             <!-- 设置面板 -->
@@ -151,19 +171,38 @@
             <!-- 使用说明 -->
             <section class="card help-card">
                 <h2>使用说明</h2>
-                <ol class="help-list">
-                    <li>点击「创建虚拟磁盘」（建议 32GB）</li>
-                    <li>点击「选择 Windows ISO」导入安装镜像</li>
-                    <li>在设置中开启「从光驱启动」</li>
-                    <li>点击「启动 Windows 10」，等待加载</li>
-                    <li>点击「显示桌面」进入 Windows 安装</li>
-                    <li>安装完成后关闭「从光驱启动」</li>
-                </ol>
+                <div class="help-section">
+                    <h3 style="font-size: 14px; margin: 0 0 8px 0; color: #0078d4;">第一步：获取 Windows 10 ISO</h3>
+                    <ol class="help-list" style="margin-bottom: 12px;">
+                        <li>点击「下载官方 Win10 ISO」按钮</li>
+                        <li>在微软官网选择"Windows 10（多版本 ISO）"</li>
+                        <li>选择"简体中文"，下载 32 位版本（推荐，内存占用更小）</li>
+                        <li>文件名应为：Win10_22H2_Chinese_Simplified_x32v1.iso（约 4GB）</li>
+                    </ol>
+                </div>
+                <div class="help-section">
+                    <h3 style="font-size: 14px; margin: 0 0 8px 0; color: #0078d4;">第二步：导入并安装</h3>
+                    <ol class="help-list">
+                        <li>点击「创建虚拟磁盘」（建议 16GB 或 32GB）</li>
+                        <li>点击「选择 Windows ISO」导入刚下载的镜像</li>
+                        <li>在设置中开启「从光驱启动（安装系统时）」</li>
+                        <li>点击「启动 Windows 10」，等待加载</li>
+                        <li>点击「显示桌面」进入 Windows 安装界面</li>
+                        <li>按照安装向导完成系统安装</li>
+                        <li>安装完成后，关闭「从光驱启动」，从硬盘启动</li>
+                    </ol>
+                </div>
                 <p class="help-note">
-                    <strong>提示：</strong>本应用使用 WebAssembly 在手机本地运行虚拟机，
-                    消耗手机内存和存储。性能有限，建议连接电源使用。
-                    添加到主屏幕后可离线运行。
+                    <strong>提示：</strong>本应用使用 WebAssembly 在手机本地运行真实 x86 虚拟机，
+                    消耗手机内存和存储。建议：
                 </p>
+                <ul class="help-tips">
+                    <li>内存分配 512MB（32位系统足够，减少手机负荷）</li>
+                    <li>磁盘大小 16GB（节省手机存储空间）</li>
+                    <li>连接电源使用，运行时耗电较快</li>
+                    <li>首次启动加载较慢，请耐心等待</li>
+                    <li>添加到主屏幕后可全屏离线运行</li>
+                </ul>
             </section>
 
             <!-- 日志 -->
